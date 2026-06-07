@@ -1,0 +1,69 @@
+http:
+  routers:
+
+    domain-service:
+      rule: "PathPrefix(`/domains`)"
+      service: domain-service
+      middlewares:
+        - auth-keycloak
+      entryPoints:
+        - web
+
+    ingestion-service:
+      rule: "PathPrefix(`/ingest`)"
+      service: ingestion-service
+      middlewares:
+        - auth-keycloak
+      entryPoints:
+        - web
+
+    retrieval-service:
+      rule: "PathPrefix(`/retrieve`)"
+      service: retrieval-service
+      middlewares:
+        - auth-keycloak
+      entryPoints:
+        - web
+
+    generation-service:
+      rule: "PathPrefix(`/generate`)"
+      service: generation-service
+      middlewares:
+        - auth-keycloak
+      entryPoints:
+        - web
+
+    evaluation-service:
+      rule: "PathPrefix(`/evaluate`)"
+      service: evaluation-service
+      middlewares:
+        - auth-keycloak
+      entryPoints:
+        - web
+
+  services:
+
+    domain-service:
+      loadBalancer:
+        servers:
+          - url: "http://domain-service:8000"
+
+    ingestion-service:
+      loadBalancer:
+        servers:
+          - url: "http://ingestion-service:8001"
+
+    retrieval-service:
+      loadBalancer:
+        servers:
+          - url: "http://retrieval-service:8002"
+
+    generation-service:
+      loadBalancer:
+        servers:
+          - url: "http://generation-service:8003"
+
+    evaluation-service:
+      loadBalancer:
+        servers:
+          - url: "http://evaluation-service:8004"

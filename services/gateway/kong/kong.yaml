@@ -1,0 +1,88 @@
+_format_version: "3.0"
+_transform: true
+
+# ------------------------------------------------------------------
+# Kong declarative config — Production
+# Mirrors the same routes as Traefik but adds enterprise plugins.
+# ------------------------------------------------------------------
+
+services:
+
+  - name: domain-service
+    url: http://domain-service:8000
+    routes:
+      - name: domain-route
+        paths:
+          - /domains
+        methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+    plugins:
+      - name: jwt
+      - name: rate-limiting
+        config:
+          minute: 100
+          policy: local
+
+  - name: ingestion-service
+    url: http://ingestion-service:8001
+    routes:
+      - name: ingestion-route
+        paths:
+          - /ingest
+        methods:
+          - POST
+    plugins:
+      - name: jwt
+      - name: rate-limiting
+        config:
+          minute: 50
+          policy: local
+
+  - name: retrieval-service
+    url: http://retrieval-service:8002
+    routes:
+      - name: retrieval-route
+        paths:
+          - /retrieve
+        methods:
+          - POST
+    plugins:
+      - name: jwt
+      - name: rate-limiting
+        config:
+          minute: 200
+          policy: local
+
+  - name: generation-service
+    url: http://generation-service:8003
+    routes:
+      - name: generation-route
+        paths:
+          - /generate
+        methods:
+          - POST
+    plugins:
+      - name: jwt
+      - name: rate-limiting
+        config:
+          minute: 100
+          policy: local
+
+  - name: evaluation-service
+    url: http://evaluation-service:8004
+    routes:
+      - name: evaluation-route
+        paths:
+          - /evaluate
+        methods:
+          - GET
+          - POST
+    plugins:
+      - name: jwt
+      - name: rate-limiting
+        config:
+          minute: 50
+          policy: local

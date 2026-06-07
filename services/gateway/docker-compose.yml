@@ -1,0 +1,49 @@
+version: "3.9"
+
+# ------------------------------------------------------------------
+# Gateway-only Docker Compose — for smoke testing Traefik routing.
+# Runs Traefik + lightweight mock services (no real FastAPI needed).
+# ------------------------------------------------------------------
+
+services:
+
+  traefik:
+    image: traefik:v3.0
+    ports:
+      - "80:80"
+      - "8080:8080"   # dashboard
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+    networks:
+      - rag-network
+
+  # Mock services — replace with real services after integration
+  domain-service:
+    image: traefik/whoami
+    networks:
+      - rag-network
+
+  ingestion-service:
+    image: traefik/whoami
+    networks:
+      - rag-network
+
+  retrieval-service:
+    image: traefik/whoami
+    networks:
+      - rag-network
+
+  generation-service:
+    image: traefik/whoami
+    networks:
+      - rag-network
+
+  evaluation-service:
+    image: traefik/whoami
+    networks:
+      - rag-network
+
+networks:
+  rag-network:
+    external: true

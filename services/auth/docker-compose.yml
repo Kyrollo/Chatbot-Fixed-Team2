@@ -1,29 +1,27 @@
-# docker run -p 127.0.0.1:8080:8080 
-
-# -e KC_BOOTSTRAP_ADMIN_USERNAME=admin 
-
-# -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin 
-
-# quay.io/keycloak/keycloak:26.6.3 
-
-# start-dev
-
 services:
   keycloak:
-    image: keycloak-rag-backup
-    container_name: keycloak
+    image: quay.io/keycloak/keycloak:26.5.0
+    
+
+    command: start-dev --import-realm
 
     environment:
       - KC_BOOTSTRAP_ADMIN_USERNAME=admin
       - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
 
-    command: start-dev
-
     ports:
-      - "8080:8080"
+      - "8180:8080"    # changed from 8080 to 8180 — avoids conflict with Traefik dashboard
 
     volumes:
       - keycloak_data:/opt/keycloak/data
+      - ./realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+
+    networks:
+      - rag-network
 
 volumes:
   keycloak_data:
+
+networks:
+  rag-network:
+    external: true     # shared network with gateway and all other services
