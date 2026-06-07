@@ -3,26 +3,35 @@
 API Gateway for the RAG system.
 - **Dev:** Traefik
 - **Prod:** Kong
+- **Auth:** Keycloak
 
 ---
 
 ## Run & Test Locally
 
 ```bash
-# 1. Start Traefik + mock services
+# 1. Start Keycloak
+cd ../auth
 docker compose up -d
 
-# 2. Install test dependency
+# 2. Wait 60 seconds, then start gateway
+cd ../gateway
+docker compose up -d
+
+# 3. Install test dependency
 pip install requests pyyaml
 
-# 3. Run smoke test
+# 4. Run smoke test
 python smoke_test.py
 
-# 4. Tear down
+# 5. Tear down
+docker compose down
+cd ../auth
 docker compose down
 ```
 
 Traefik dashboard → http://localhost:8080/dashboard/
+Keycloak → http://localhost:8180
 
 ---
 
@@ -38,7 +47,23 @@ Traefik dashboard → http://localhost:8080/dashboard/
 
 ---
 
+## Auth Flow
+
+```text
+User → Traefik → Keycloak validation → Service
+
+Headers injected:
+- X-User-Id
+- X-User-Roles
+- X-Domain-Id
+```
+
+---
+
 ## Notes
 
-- `middlewares.yml` has an auth placeholder — will be replaced with Keycloak JWT validation when auth service is ready.
-- Kong config mirrors the same routes with JWT + rate-limiting plugins for production.
+- All requests go through Traefik gateway
+- Keycloak handles authentication and issues JWT tokens
+- Gateway enforces auth before reaching services
+- Kong config mirrors Traefik for production
+- Run smoke test after any change
