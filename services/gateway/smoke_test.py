@@ -22,11 +22,7 @@ KEYCLOAK_URL   = "http://localhost:8180/realms/rag-system"
 ROUTES_CONFIG  = "traefik/dynamic/routes.yml"
 
 EXPECTED_ROUTES = [
-    {"name": "domain-service",     "path": "/domains"},
-    {"name": "ingestion-service",  "path": "/ingest"},
-    {"name": "retrieval-service",  "path": "/retrieve"},
-    {"name": "generation-service", "path": "/generate"},
-    {"name": "evaluation-service", "path": "/evaluate"},
+    {"name": "domain-service", "path": "/domains"},
 ]
 
 GREEN  = "\033[92m"

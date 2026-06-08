@@ -24,13 +24,13 @@ services:
     ports:
       - "8180:8080"
     volumes:
-      - ../auth/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+      - ./services/auth/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
     networks:
       - rag-network
 
   domain-service:
     build:
-      context: ../domain-service
+      context: ./services/domain-service
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/domain_db
       KEYCLOAK_ISSUER: http://localhost:8180/realms/rag-system,http://keycloak:8080/realms/rag-system
@@ -64,8 +64,8 @@ services:
       - "80:80"
       - "8080:8080"
     volumes:
-      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./services/gateway/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./services/gateway/traefik/dynamic:/etc/traefik/dynamic:ro
     networks:
       - rag-network
 

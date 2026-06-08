@@ -1,0 +1,155 @@
+version: "3.9"
+
+# ------------------------------------------------------------------
+# Root Docker Compose — Full Stack
+# Includes: infrastructure + auth + gateway + all services
+# Run from repo root: docker compose up -d
+# ------------------------------------------------------------------
+
+services:
+
+  # ----------------------------------------------------------------
+  # INFRASTRUCTURE
+  # ----------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: domain_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d domain_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - rag-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - rag-network
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.2
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - rag-network
+
+  # ----------------------------------------------------------------
+  # AUTH
+  # ----------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.5.0
+    container_name: keycloak
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    ports:
+      - "8180:8080"
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+      - ./services/auth/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    networks:
+      - rag-network
+
+  # ----------------------------------------------------------------
+  # GATEWAY
+  # ----------------------------------------------------------------
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    depends_on:
+      - keycloak
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - ./services/gateway/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./services/gateway/traefik/dynamic:/etc/traefik/dynamic:ro
+    networks:
+      - rag-network
+
+  # ----------------------------------------------------------------
+  # SERVICES
+  # ----------------------------------------------------------------
+  domain-service:
+    build:
+      context: ../services/domain-service
+    container_name: domain-service
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/domain_db
+      KEYCLOAK_ISSUER: http://localhost:8180/realms/rag-system,http://keycloak:8080/realms/rag-system
+      KEYCLOAK_REALM_URL: http://keycloak:8080/realms/rag-system
+      KEYCLOAK_CLIENT_ID: domain-service
+      KEYCLOAK_ALGORITHM: RS256
+      SYSTEM_ADMIN_ROLE: system_admin
+      INTERNAL_API_KEY: change-me-internal-key
+      SERVICE_PORT: 8001
+      SERVICE_NAME: domain-service
+      DEFAULT_LLM_ROUTE: default
+      DEFAULT_CHUNK_SIZE: 512
+      DEFAULT_CHUNK_OVERLAP: 64
+      DEFAULT_CONFIDENCE_THRESHOLD: "0.5"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    ports:
+      - "8001:8001"
+    networks:
+      - rag-network
+
+  ingestion-service:
+    build:
+      context: ../services/ingestion-service
+    container_name: ingestion-service
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/domain_db
+      REDIS_URL: redis://redis:6379/0
+      UPLOAD_DIR: /data/uploads
+      MAX_SIZE_MB: "50"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "8002:8002"
+    volumes:
+      - uploads_data:/data/uploads
+    networks:
+      - rag-network
+
+  # ----------------------------------------------------------------
+  # ADD NEW SERVICES BELOW AS THEY ARE BUILT
+  # ----------------------------------------------------------------
+  # worker-service:
+  # retrieval-service:
+  # generation-service:
+  # evaluation-service:
+
+volumes:
+  postgres_data:
+  keycloak_data:
+  qdrant_data:
+  uploads_data:
+
+networks:
+  rag-network:
+    name: rag-network
+    driver: bridge

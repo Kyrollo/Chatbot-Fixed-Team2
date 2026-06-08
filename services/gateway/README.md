@@ -1,69 +1,77 @@
 # Gateway Service
 
-API Gateway for the RAG system.
-- **Dev:** Traefik
-- **Prod:** Kong
-- **Auth:** Keycloak
+The gateway is now wired to the real `domain-service` for development.
 
----
+- **Dev gateway:** Traefik
+- **Prod gateway config:** Kong
+- **Auth provider:** Keycloak
+- **Current live backend behind the gateway:** `domain-service`
 
-## Run & Test Locally
+## Development Ports
+
+- `80` Traefik HTTP entrypoint
+- `8080` Traefik dashboard
+- `8180` Keycloak
+- `8001` domain-service
+- `5432` PostgreSQL
+
+## Run The Integrated Dev Stack
+
+From the repository root:
 
 ```bash
-# 1. Start Keycloak
-cd ../auth
-docker compose up -d
-
-# 2. Wait 60 seconds, then start gateway
-cd ../gateway
-docker compose up -d
-
-# 3. Install test dependency
-pip install requests pyyaml
-
-# 4. Run smoke test
-python smoke_test.py
-
-# 5. Tear down
-docker compose down
-cd ../auth
-docker compose down
+docker compose up --build
 ```
 
-Traefik dashboard → http://localhost:8080/dashboard/
-Keycloak → http://localhost:8180
+Or from this folder:
 
----
+```bash
+docker compose up --build
+```
 
-## Routes
+Both compose files start the same connected stack:
 
-| Path        | Service            |
-|-------------|--------------------|
-| /domains    | domain-service     |
-| /ingest     | ingestion-service  |
-| /retrieve   | retrieval-service  |
-| /generate   | generation-service |
-| /evaluate   | evaluation-service |
+- PostgreSQL
+- Keycloak
+- domain-service
+- Traefik
 
----
+## Active Route
 
-## Auth Flow
+| Path | Service |
+|---|---|
+| `/domains` | `domain-service` |
+
+## Auth Behavior
+
+Requests to `/domains` flow through:
 
 ```text
-User → Traefik → Keycloak validation → Service
-
-Headers injected:
-- X-User-Id
-- X-User-Roles
-- X-Domain-Id
+Client -> Traefik -> Keycloak auth check -> domain-service
 ```
 
----
+The `domain-service` also validates the bearer token itself, so both the
+gateway and the backend participate in auth enforcement.
+
+## Smoke Test
+
+After the stack is up:
+
+```bash
+pip install requests pyyaml
+python smoke_test.py
+```
+
+The smoke test verifies:
+
+- Traefik is reachable
+- Keycloak is reachable
+- `/domains` is protected
+- unknown routes return `404`
+- the dashboard is up
 
 ## Notes
 
-- All requests go through Traefik gateway
-- Keycloak handles authentication and issues JWT tokens
-- Gateway enforces auth before reaching services
-- Kong config mirrors Traefik for production
-- Run smoke test after any change
+- Older mock `whoami` backends were removed from the active dev stack.
+- Future services such as ingestion, retrieval, and generation remain part of
+  the target architecture, but they are not wired into the running gateway yet.
