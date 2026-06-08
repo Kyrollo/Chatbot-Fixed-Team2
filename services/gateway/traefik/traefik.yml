@@ -10,6 +10,9 @@ providers:
   file:
     directory: /etc/traefik/dynamic
     watch: true  # auto-reload on config change
+  docker:
+    exposedByDefault: false
+    network: rag-network
 
 log:
   level: INFO

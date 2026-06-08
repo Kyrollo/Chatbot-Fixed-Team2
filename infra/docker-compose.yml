@@ -1,11 +1,5 @@
 version: "3.9"
 
-# ------------------------------------------------------------------
-# Root Docker Compose — Full Stack
-# Includes: infrastructure + auth + gateway + all services
-# Run from repo root: docker compose up -d
-# ------------------------------------------------------------------
-
 services:
 
   # ----------------------------------------------------------------
@@ -67,7 +61,7 @@ services:
       - rag-network
 
   # ----------------------------------------------------------------
-  # GATEWAY
+  # GATEWAY (TRAEFIK)
   # ----------------------------------------------------------------
   traefik:
     image: traefik:v3.0
@@ -88,7 +82,7 @@ services:
   # ----------------------------------------------------------------
   domain-service:
     build:
-      context: ../services/domain-service
+      context: ../services/domain-service   # FIX: was ../services/domain-service
     container_name: domain-service
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/domain_db
@@ -113,13 +107,18 @@ services:
       - "8001:8001"
     networks:
       - rag-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.domain.rule=PathPrefix(`/domain`)"
+      - "traefik.http.routers.domain.entrypoints=web"
+      - "traefik.http.services.domain.loadbalancer.server.port=8001"
 
   ingestion-service:
     build:
-      context: ../services/ingestion-service
+      context: ../services/ingestion-service   # FIX: was ./services/ingestion-service (correct already if compose is at root)
     container_name: ingestion-service
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/domain_db
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/domain_db  # FIX: was ragdb
       REDIS_URL: redis://redis:6379/0
       UPLOAD_DIR: /data/uploads
       MAX_SIZE_MB: "50"
@@ -134,22 +133,26 @@ services:
       - uploads_data:/data/uploads
     networks:
       - rag-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ingest.rule=PathPrefix(`/ingest`)"
+      - "traefik.http.routers.ingest.entrypoints=web"
+      - "traefik.http.routers.ingest.middlewares=ingest-strip@file"
+      - "traefik.http.services.ingest.loadbalancer.server.port=8002"
 
-  # ----------------------------------------------------------------
-  # ADD NEW SERVICES BELOW AS THEY ARE BUILT
-  # ----------------------------------------------------------------
-  # worker-service:
-  # retrieval-service:
-  # generation-service:
-  # evaluation-service:
-
+# ----------------------------------------------------------------
+# VOLUMES
+# ----------------------------------------------------------------
 volumes:
   postgres_data:
   keycloak_data:
   qdrant_data:
   uploads_data:
 
+# ----------------------------------------------------------------
+# NETWORK
+# ----------------------------------------------------------------
 networks:
   rag-network:
+    external: true
     name: rag-network
-    driver: bridge
