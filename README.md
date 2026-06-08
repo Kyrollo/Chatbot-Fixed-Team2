@@ -1,151 +1,208 @@
-# Domain Service
+# Chatbot-Fixed-Team2
 
-Domain Service for the **Multi-User Multi-Domain RAG System** (Sprint 1).
+Multi-user, multi-domain RAG system for the Fixed Solutions AI Internship 2026.
 
-It manages knowledge domains, domain memberships (RBAC), and per-domain RAG
-configuration. It also exposes an internal endpoint that other services
-(ingestion, retrieval, generation) call to verify access before performing
-operations.
+This repository follows the target architecture in [Architecture_Decisions_e5.md](Architecture_Decisions_e5.md). The full platform is still larger than the code currently in the repo, but the existing services are now wired into one working development stack with consistent ports and shared networking.
 
-## Features
+## What Works Now
 
-- Domain CRUD with soft-delete (archive)
-- Per-domain role-based membership: `domain_admin`, `contributor`, `reader`
-- Per-domain RAG configuration (chunking, LLM route, confidence threshold)
-- Keycloak JWT authentication
-- Internal RBAC check endpoint for service-to-service authorization
+The current connected development stack includes:
 
-## Requirements
+- `gateway` via Traefik
+- `auth` via Keycloak
+- `domain-service` via FastAPI
+- `postgres` for domain-service persistence
 
-- Python 3.12+
-- PostgreSQL 13+
-- A running Keycloak realm
+These services are connected through Docker Compose and a shared Docker network.
 
-## Environment Variables
+## Current Dev Ports
 
-See `.env.example`. Copy it and fill in values:
+| Port | Service |
+|---|---|
+| `80` | Traefik gateway |
+| `8080` | Traefik dashboard |
+| `8180` | Keycloak |
+| `8001` | domain-service |
+| `5432` | PostgreSQL |
 
-```bash
-cp .env.example .env
-```
+## Current Request Flow
 
-| Variable | Description |
-|----------|-------------|
-| `DATABASE_URL` | Async PostgreSQL DSN (`postgresql+asyncpg://...`) |
-| `KEYCLOAK_ISSUER` | Realm issuer URL |
-| `KEYCLOAK_PUBLIC_KEY` | Realm RS256 public key (PEM body or full PEM) |
-| `KEYCLOAK_CLIENT_ID` | Client ID for this service |
-| `SYSTEM_ADMIN_ROLE` | Realm role mapped to system admin |
-| `INTERNAL_API_KEY` | Shared secret for `/internal/*` endpoints |
-| `SERVICE_PORT` | Port to listen on (default 8001) |
+Today, the live request path is:
 
-## Running Locally
+1. Client calls Traefik on port `80`
+2. Traefik checks auth against Keycloak
+3. Authenticated requests are forwarded to `domain-service`
+4. `domain-service` validates the JWT again and enforces RBAC
+5. Domain data is stored in PostgreSQL
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+That means the currently implemented services do work together rather than existing only as separate folders.
 
-# Ensure Postgres is running and DATABASE_URL is set
-uvicorn main:app --reload --port 8001
-```
+## Run The Stack
 
-Tables are auto-created on startup for Sprint 1. For production use Alembic
-migrations instead.
-
-OpenAPI docs: <http://localhost:8001/docs>
-
-## Docker
+From the repository root:
 
 ```bash
-docker build -t domain-service .
-
-docker run --rm -p 8001:8001 --env-file .env domain-service
+docker compose up --build
 ```
 
-## API Overview
-
-### Domains
-| Method | Path | Permission |
-|--------|------|------------|
-| POST | `/domains` | system_admin |
-| GET | `/domains` | authenticated |
-| GET | `/domains/{domain_id}` | assigned members |
-| PATCH | `/domains/{domain_id}` | system_admin, domain_admin |
-| DELETE | `/domains/{domain_id}` | system_admin, domain_admin (archive) |
-
-### Members
-| Method | Path | Permission |
-|--------|------|------------|
-| POST | `/domains/{domain_id}/members` | system_admin, domain_admin |
-| GET | `/domains/{domain_id}/members` | + contributor |
-| PATCH | `/domains/{domain_id}/members/{user_id}` | system_admin, domain_admin |
-| DELETE | `/domains/{domain_id}/members/{user_id}` | system_admin, domain_admin |
-
-### Config
-| Method | Path | Permission |
-|--------|------|------------|
-| GET | `/domains/{domain_id}/config` | + contributor |
-| PATCH | `/domains/{domain_id}/config` | system_admin, domain_admin |
-
-### Internal
-| Method | Path | Permission |
-|--------|------|------------|
-| POST | `/internal/check-access` | internal services (X-Internal-Key) |
-
-## Testing Examples
-
-Get a token from Keycloak, then:
+Stop it with:
 
 ```bash
-TOKEN="<jwt>"
-
-# Create a domain (system admin only)
-curl -X POST http://localhost:8001/domains \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "legal", "description": "Legal documents"}'
-
-# List my domains
-curl http://localhost:8001/domains \
-  -H "Authorization: Bearer $TOKEN"
-
-# Assign a member
-curl -X POST http://localhost:8001/domains/<domain_id>/members \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": "user-uuid", "role": "contributor"}'
-
-# Update config
-curl -X PATCH http://localhost:8001/domains/<domain_id>/config \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"chunk_size": 1024, "confidence_threshold": 0.7}'
+docker compose down
 ```
 
-Internal access check (service-to-service):
+## Service URLs
+
+- Traefik dashboard: `http://localhost:8080/dashboard/`
+- Keycloak realm base: `http://localhost:8180/realms/rag-system`
+- domain-service direct docs: `http://localhost:8001/docs`
+- domain-service through gateway: `http://localhost/domains`
+
+## Current Repository Structure
+
+```text
+services/
+  auth/
+  domain-service/
+  gateway/
+docker-compose.yml
+Architecture_Decisions_e5.md
+README.md
+```
+
+## Implemented Services
+
+### `services/domain-service`
+
+This is the most complete application service in the repository.
+
+Implemented features:
+
+- FastAPI app
+- async SQLAlchemy setup
+- PostgreSQL models for domains, memberships, and config
+- Keycloak JWT validation
+- system admin checks
+- per-domain role enforcement
+- domain CRUD
+- member CRUD
+- per-domain RAG config
+- internal `/internal/check-access` endpoint for future service-to-service authorization
+
+### `services/auth`
+
+This provides Keycloak bootstrap configuration:
+
+- realm export
+- local compose setup
+- seeded realm and users
+
+### `services/gateway`
+
+This provides the gateway layer:
+
+- Traefik config for development
+- Kong config for production
+- smoke test script
+- integrated compose setup for the currently implemented services
+
+## Target Architecture
+
+Per [Architecture_Decisions_e5.md](Architecture_Decisions_e5.md), the intended system is larger and includes:
+
+- `ingestion-service`
+- `worker-service`
+- `retrieval-service`
+- `generation-service`
+- `evaluation-service`
+- `ui`
+- Redis
+- Qdrant
+- Ollama
+- Groq API
+- Kubernetes and Helm for production
+
+Those parts are still planned, not yet implemented in this repository.
+
+## What Changed To Make The Current Services Work Together
+
+The main integration fixes were:
+
+- added a root `docker-compose.yml` for the real connected stack
+- connected Traefik to the real `domain-service`
+- removed mock backends from the active gateway configuration
+- fixed the `domain-service` route to use port `8001`
+- aligned the development port documentation
+- connected `domain-service` to PostgreSQL
+- adjusted Keycloak settings so token validation works in both host and Docker contexts
+
+## Active Gateway Route
+
+The active gateway route right now is:
+
+| Path | Backend |
+|---|---|
+| `/domains` | `domain-service` |
+
+This is the only route backed by a real service at the moment.
+
+## Keycloak Notes
+
+The imported realm is `rag-system`.
+
+Included users in the realm export include:
+
+- `admin` with `system_admin`
+- `reader1` with `reader`
+
+Keycloak admin console runs at `http://localhost:8180`.
+
+## Smoke Test
+
+To verify the connected stack:
 
 ```bash
-curl -X POST http://localhost:8001/internal/check-access \
-  -H "X-Internal-Key: change-me-internal-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-        "user_id": "user-uuid",
-        "domain_id": "domain-uuid",
-        "required_role": "contributor"
-      }'
-# -> {"allowed": true, "role": "contributor", "reason": null}
+cd services/gateway
+pip install requests pyyaml
+python smoke_test.py
 ```
 
-## Integration with Keycloak
+The smoke test checks:
 
-1. Create a realm (e.g. `rag`).
-2. Create a client `domain-service` (confidential or public depending on setup).
-3. Define a realm role `system_admin` and assign it to platform administrators.
-4. Copy the realm's RS256 public key (Realm Settings → Keys → RS256 → Public key)
-   into `KEYCLOAK_PUBLIC_KEY`.
-5. Clients obtain tokens from Keycloak and send them as
-   `Authorization: Bearer <token>`.
+- Traefik startup
+- Keycloak reachability
+- `/domains` auth protection
+- 404 behavior for unknown routes
+- Traefik dashboard availability
 
-The service reads `sub`, `preferred_username`, `email`, and roles from
-`realm_access.roles` / `resource_access.<client>.roles`.
+## Architecture Status
+
+### Connected and working now
+
+- gateway <-> Keycloak
+- gateway <-> domain-service
+- domain-service <-> PostgreSQL
+
+### Not connected yet because those services do not exist yet
+
+- gateway <-> ingestion-service
+- gateway <-> retrieval-service
+- gateway <-> generation-service
+- gateway <-> evaluation-service
+- domain-service <-> worker-service
+- retrieval-service <-> Qdrant
+- generation-service <-> Ollama or Groq
+
+## Next Build Steps
+
+The next logical implementation steps are:
+
+1. add `ingestion-service`
+2. add Redis and `worker-service`
+3. add `retrieval-service`
+4. add `generation-service`
+5. wire those services into the gateway one by one
+
+## Summary
+
+The repo is no longer just a disconnected architecture sketch. The currently implemented services are now aligned on ports, network wiring, auth flow, and local startup, while the README still keeps a clear distinction between what exists now and what remains part of the larger architecture plan.

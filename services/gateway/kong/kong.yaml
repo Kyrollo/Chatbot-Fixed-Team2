@@ -1,0 +1,27 @@
+_format_version: "3.0"
+_transform: true
+
+# ------------------------------------------------------------------
+# Kong declarative config — Production
+# Mirrors the same routes as Traefik but adds enterprise plugins.
+# ------------------------------------------------------------------
+
+services:
+
+  - name: domain-service
+    url: http://domain-service:8001
+    routes:
+      - name: domain-route
+        paths:
+          - /domains
+        methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+    plugins:
+      - name: jwt
+      - name: rate-limiting
+        config:
+          minute: 100
+          policy: local

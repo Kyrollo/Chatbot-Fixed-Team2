@@ -1,4 +1,8 @@
+import json
+from functools import lru_cache
 from typing import Annotated, AsyncGenerator
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -34,24 +38,60 @@ def _build_public_key(raw: str) -> str:
     return f"-----BEGIN PUBLIC KEY-----\n{raw}\n-----END PUBLIC KEY-----"
 
 
-def _decode_token(token: str) -> dict:
+def _issuer_candidates() -> list[str]:
+    return [issuer.strip() for issuer in settings.KEYCLOAK_ISSUER.split(",") if issuer.strip()]
+
+
+@lru_cache
+def _get_public_key() -> str:
+    if settings.KEYCLOAK_PUBLIC_KEY.strip():
+        return _build_public_key(settings.KEYCLOAK_PUBLIC_KEY)
+
     try:
-        public_key = _build_public_key(settings.KEYCLOAK_PUBLIC_KEY)
-        payload = jwt.decode(
-            token,
-            public_key,
-            algorithms=[settings.KEYCLOAK_ALGORITHM],
-            audience=settings.KEYCLOAK_CLIENT_ID,
-            issuer=settings.KEYCLOAK_ISSUER,
-            options={"verify_aud": False},  # Keycloak puts client in azp; relax aud
-        )
-        return payload
-    except JWTError as exc:
+        with urlopen(settings.KEYCLOAK_REALM_URL, timeout=5) as response:
+            realm_data = json.load(response)
+    except URLError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {exc}",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Unable to fetch Keycloak realm metadata. Set KEYCLOAK_PUBLIC_KEY "
+                f"or make KEYCLOAK_REALM_URL reachable. Details: {exc}"
+            ),
+        ) from exc
+
+    public_key = realm_data.get("public_key")
+    if not public_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Keycloak realm metadata did not include a public_key value",
         )
+
+    return _build_public_key(public_key)
+
+
+def _decode_token(token: str) -> dict:
+    public_key = _get_public_key()
+    errors: list[str] = []
+
+    for issuer in _issuer_candidates():
+        try:
+            payload = jwt.decode(
+                token,
+                public_key,
+                algorithms=[settings.KEYCLOAK_ALGORITHM],
+                audience=settings.KEYCLOAK_CLIENT_ID,
+                issuer=issuer,
+                options={"verify_aud": False},  # Keycloak puts client in azp; relax aud
+            )
+            return payload
+        except JWTError as exc:
+            errors.append(f"{issuer}: {exc}")
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=f"Invalid token: {' | '.join(errors)}",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 def _extract_roles(payload: dict) -> list[str]:

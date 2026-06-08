@@ -1,0 +1,15 @@
+api:
+  dashboard: true
+  insecure: true  # dev only — dashboard accessible without auth
+
+entryPoints:
+  web:
+    address: ":80"
+
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true  # auto-reload on config change
+
+log:
+  level: INFO

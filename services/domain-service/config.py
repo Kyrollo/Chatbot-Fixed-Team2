@@ -13,7 +13,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/domain_db"
 
     # Keycloak
-    KEYCLOAK_ISSUER: str = "http://localhost:8080/realms/rag"
+    KEYCLOAK_ISSUER: str = (
+        "http://localhost:8180/realms/rag-system,"
+        "http://keycloak:8080/realms/rag-system"
+    )
+    KEYCLOAK_REALM_URL: str = "http://localhost:8180/realms/rag-system"
     KEYCLOAK_PUBLIC_KEY: str = ""  # PEM body (without header/footer) or full PEM
     KEYCLOAK_CLIENT_ID: str = "domain-service"
     KEYCLOAK_ALGORITHM: str = "RS256"

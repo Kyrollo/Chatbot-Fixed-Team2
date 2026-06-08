@@ -1,0 +1,17 @@
+http:
+  routers:
+
+    domain-service:
+      rule: "PathPrefix(`/domains`)"
+      service: domain-service
+      middlewares:
+        - auth-keycloak
+      entryPoints:
+        - web
+
+  services:
+
+    domain-service:
+      loadBalancer:
+        servers:
+          - url: "http://domain-service:8001"
