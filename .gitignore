@@ -4,3 +4,4 @@ __pycache__/
 uploads/
 venv/
 *.ini
+.vscode/

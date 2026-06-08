@@ -1,0 +1,18 @@
+http:
+  middlewares:
+
+    auth-keycloak:
+      forwardAuth:
+        # Keycloak is on the shared rag-network, accessible by container name
+        address: "http://keycloak:8080/realms/rag-system/protocol/openid-connect/userinfo"
+        authResponseHeaders:
+          - X-User-Id
+          - X-User-Roles
+          - X-Domain-Id
+        trustForwardHeader: true
+
+    # Rate limiting — activate in later sprint
+    # rate-limit:
+    #   rateLimit:
+    #     average: 100
+    #     burst: 50
