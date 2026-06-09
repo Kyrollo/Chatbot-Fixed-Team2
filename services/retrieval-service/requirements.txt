@@ -1,0 +1,11 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.8.2
+pydantic-settings==2.4.0
+
+# Embedding model
+sentence-transformers==3.1.0
+torch==2.4.1         # CPU-only wheel — see Dockerfile
+
+# Vector DB
+qdrant-client==1.11.3
