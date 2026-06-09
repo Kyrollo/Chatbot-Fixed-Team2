@@ -1,0 +1,31 @@
+http:
+  routers:
+
+    domain-service:
+      rule: "PathPrefix(`/domains`)"
+      service: domain-service
+      middlewares:
+        - auth-keycloak
+      entryPoints:
+        - web
+
+    ingestion-service:
+      rule: "PathPrefix(`/ingest`)"
+      service: ingestion-service
+      middlewares:
+        - auth-keycloak
+      entryPoints:
+        - web
+
+  services:
+
+    domain-service:
+      loadBalancer:
+        servers:
+          - url: "http://domain-service:8001"
+
+    
+    ingestion-service:
+      loadBalancer:
+        servers:
+          - url: "http://ingestion-service:8002"

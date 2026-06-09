@@ -23,6 +23,10 @@ ROUTES_CONFIG  = "traefik/dynamic/routes.yml"
 
 EXPECTED_ROUTES = [
     {"name": "domain-service", "path": "/domains"},
+    {"name": "ingestion-service", "path": "/ingest"},
+    {"name": "retrieval-service", "path": "/retrieve"},
+    {"name": "generation-service", "path": "/generate/health"},
+    {"name": "evaluation-service", "path": "/evaluate/health"},
 ]
 
 GREEN  = "\033[92m"
@@ -117,21 +121,22 @@ def check_keycloak():
 # ------------------------------------------------------------------
 def check_routes():
     print("\n[4] Checking route responses...")
-    info("Routes are protected — expecting 401 Unauthorized (no token sent)")
+    info("Protected routes should return 401 without a token")
     all_passed = True
 
     for route in EXPECTED_ROUTES:
         path = route["path"]
+        expected = route.get("expected_status", 401)
         url  = f"{TRAEFIK_BASE}{path}"
         try:
             r = requests.get(url, timeout=10)
-            if r.status_code == 401:
-                ok(f"GET {path} → 401 (auth is working)")
+            if r.status_code == expected:
+                ok(f"GET {path} → {expected}")
             elif r.status_code == 200:
                 fail(f"GET {path} → 200 (auth middleware not applied!)")
                 all_passed = False
             else:
-                fail(f"GET {path} → {r.status_code} (unexpected)")
+                fail(f"GET {path} → {r.status_code} (expected {expected})")
                 all_passed = False
         except requests.exceptions.ConnectionError:
             fail(f"GET {path} → connection refused")

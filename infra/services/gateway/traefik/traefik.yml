@@ -1,18 +1,22 @@
 api:
   dashboard: true
-  insecure: true  # dev only — dashboard accessible without auth
+  insecure: true
 
 entryPoints:
   web:
     address: ":80"
+  traefik:
+    address: ":8080"
 
 providers:
   file:
     directory: /etc/traefik/dynamic
-    watch: true  # auto-reload on config change
+    watch: true
   docker:
     exposedByDefault: false
     network: rag-network
 
 log:
   level: INFO
+
+accessLog: {} 
