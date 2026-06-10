@@ -15,15 +15,12 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # File upload
-    upload_dir: str = "/data/uploads"
+    upload_dir: str = "data/uploads"
     max_size_mb: int = 50
 
     # Keycloak JWT validation (same realm as domain-service)
-    KEYCLOAK_ISSUER: str = (
-        "http://keycloak:8080/realms/rag-system,"
-        "http://localhost:8180/realms/rag-system"
-    )
-    KEYCLOAK_REALM_URL: str = "http://keycloak:8080/realms/rag-system"
+    KEYCLOAK_ISSUER: str = "http://localhost:8180/realms/rag-system"
+    KEYCLOAK_REALM_URL: str = "http://localhost:8180/realms/rag-system"
     KEYCLOAK_CLIENT_ID: str = "domain-service"
     KEYCLOAK_ALGORITHM: str = "RS256"
     KEYCLOAK_PUBLIC_KEY: str = ""
@@ -32,7 +29,7 @@ class Settings(BaseSettings):
     INTERNAL_API_KEY: str = "rag-internal-dev-key-change-in-prod"
 
     # Domain service URL for RBAC checks
-    DOMAIN_SERVICE_URL: str = "http://domain-service:8001"
+    DOMAIN_SERVICE_URL: str = "http://localhost:8001"
 
     # Keycloak system admin role name
     SYSTEM_ADMIN_ROLE: str = "system_admin"

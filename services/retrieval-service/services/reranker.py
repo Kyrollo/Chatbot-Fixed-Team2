@@ -1,7 +1,10 @@
 import asyncio
+import sys
 from functools import lru_cache
+from pathlib import Path
 
-from sentence_transformers import CrossEncoder
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
+import network_bootstrap  # noqa: F401, E402
 
 from config import settings
 from schemas.retrieval import ChunkResult
@@ -9,6 +12,8 @@ from schemas.retrieval import ChunkResult
 
 class RerankerService:
     def __init__(self) -> None:
+        from sentence_transformers import CrossEncoder  # noqa: PLC0415
+
         self._model = CrossEncoder(settings.RERANKER_MODEL)
 
     async def rerank(self, query: str, candidates: list[ChunkResult], top_k: int) -> list[ChunkResult]:

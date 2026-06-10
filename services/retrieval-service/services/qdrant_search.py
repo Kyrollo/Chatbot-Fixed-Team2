@@ -1,17 +1,21 @@
 import logging
+import sys
 from functools import lru_cache
-
-from qdrant_client import AsyncQdrantClient
+from pathlib import Path
 
 from config import settings
 from schemas.retrieval import ChunkResult
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "scripts"))
+from qdrant_client_factory import async_qdrant_client  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 
 class QdrantSearchService:
     def __init__(self) -> None:
-        self._client = AsyncQdrantClient(url=settings.QDRANT_URL)
+        self._client = async_qdrant_client()
 
     async def search(
         self,

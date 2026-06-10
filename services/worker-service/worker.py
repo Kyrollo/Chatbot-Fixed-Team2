@@ -1,3 +1,4 @@
+import hf_env  # noqa: F401 — MUST be first: sets HF_HUB_OFFLINE before any HuggingFace import
 import os
 from celery import Celery
 from dotenv import load_dotenv
@@ -28,8 +29,9 @@ celery_app.conf.update(
         "worker.tasks.process_document": {"queue": "ingestion"},
         "tasks.process.process_document": {"queue": "ingestion"},
     },
-    worker_prefetch_multiplier=1,   # one job at a time per worker (CPU-heavy)
-    task_acks_late=True,            # only ack after task completes (safe retry)
+    worker_prefetch_multiplier=1,            # one job at a time per worker (CPU-heavy)
+    task_acks_late=True,                     # only ack after task completes (safe retry)
+    broker_connection_retry_on_startup=True, # suppress CPendingDeprecationWarning in Celery 6+
 )
 
 

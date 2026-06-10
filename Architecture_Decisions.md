@@ -2,21 +2,21 @@
 
 ## Current Status
 
-This repository now has a working backend RAG path with these implementation states:
+This repository has a working backend RAG path running locally (no Docker). All services are launched via `run_services.py`.
 
 | Component | Status | Notes |
 |---|---|---|
 | Gateway (`traefik`) | implemented | routes domain, ingestion, retrieval, generation, evaluation |
-| Auth (`keycloak`) | implemented | seeded realm for local development |
+| Auth (`keycloak`) | implemented | seeded realm, auto-downloaded by `run_services.py` |
 | PostgreSQL | implemented | stores domains, documents, chunks, query logs |
-| Redis | implemented | Celery broker/backend plus retrieval and generation cache |
-| Qdrant | implemented | dense vector retrieval |
+| Redis | implemented | Celery broker/backend plus retrieval and generation cache; auto-downloaded portable version on Windows |
+| Qdrant | implemented | embedded local storage at `data/qdrant` (no server needed) |
 | Domain service | implemented | CRUD, members, config, internal access check |
 | Ingestion service | implemented | upload, RBAC, enqueue, status polling |
 | Worker service | implemented | extract, chunk, embed, index into Qdrant and PostgreSQL |
 | Retrieval service | implemented | vector + BM25 + RRF + reranking + cache |
 | Generation service | implemented | retrieval orchestration, prompting, LLM routing, answer cache |
-| Evaluation service | implemented as stub | LLM-as-judge endpoint under Compose profile |
+| Evaluation service | implemented as stub | LLM-as-judge endpoint, started with `--evaluation` flag |
 | Web UI | intentionally skipped | API-only sprint |
 
 ## Service Topology
@@ -46,14 +46,14 @@ Client -> Traefik -> ingestion-service -> Redis queue -> worker-service
 
 ## Decision 1: Single Root `.env`
 
-All services now consume the same root `.env` through Compose `env_file`.
+All services consume the same root `.env` loaded by `run_services.py`.
 
 Why:
 
 - one source of truth for local development
 - fewer mismatches between service folders
 - `pydantic-settings` already tolerates extra variables with `extra="ignore"`
-- per-service `SERVICE_NAME` and `SERVICE_PORT` are injected through Compose overrides
+- per-service overrides (ports, names) are injected by the launcher
 
 Result:
 
@@ -62,11 +62,9 @@ Result:
 
 ## Decision 2: Retrieval Pipeline Uses Three Signals
 
-`retrieval-service` is no longer dense-vector-only.
+`retrieval-service` is not dense-vector-only. It implements a multi-stage hybrid pipeline:
 
-Implemented pipeline:
-
-1. query embedding with `intfloat/multilingual-e5-base`
+1. query embedding with `intfloat/multilingual-e5-small` (384 dimensions)
 2. Qdrant dense search
 3. PostgreSQL BM25 search on `document_chunks.search_vec`
 4. Reciprocal Rank Fusion
@@ -113,11 +111,11 @@ Why:
 
 Operational note:
 
-- the containers expect host Ollama at `http://host.docker.internal:11434/v1`
+- Ollama runs on the host machine at `http://localhost:11434/v1`
 
-## Decision 5: Evaluation Service Is a Profile
+## Decision 5: Evaluation Service Is Optional
 
-`evaluation-service` is available behind the Compose `evaluation` profile instead of starting by default.
+`evaluation-service` is started only when the `--evaluation` flag is passed to `run_services.py`.
 
 Why:
 
@@ -128,7 +126,7 @@ Why:
 Run it with:
 
 ```bash
-docker compose --profile evaluation up --build
+python run_services.py --evaluation
 ```
 
 ## Decision 6: Worker Maintains Dual Indexes
@@ -153,11 +151,50 @@ Redis is used for:
 - retrieval cache
 - generation cache
 
+When Redis is unavailable, the system gracefully degrades:
+
+- in-memory TTL cache (`scripts/memory_cache.py`) replaces Redis cache
+- sync subprocess replaces Celery async ingestion
+
 Why:
 
 - one operational dependency instead of several
-- this fits local Docker development well
+- graceful degradation means Redis is not a hard requirement for local development
 - the current scale target does not justify splitting queue and cache infrastructure
+
+## Decision 8: Repository Hygiene — Single README, Comprehensive `.gitignore`
+
+All project documentation (setup, usage, API walkthrough, troubleshooting) is consolidated in a single `README.md`.
+
+Why:
+
+- a single entry point is easier for new developers to find and follow
+- eliminates duplicate/conflicting instructions across multiple files
+- `.gitignore` now covers all generated artifacts: `__pycache__`, `.venv`, `data/`, `tools/`, `infra/`, `scripts/fixtures/`, and IDE files
+
+Result:
+
+- previous files `LOCAL_SETUP.md`, `PORTS_AND_RUN.md`, and `PROJECT_GUIDE.md` are merged into `README.md` and removed
+- `Architecture_Decisions.md` remains separate as a living architectural record
+
+## Decision 9: Scripts Directory Contains Shared Runtime Modules
+
+The `scripts/` directory contains both test scripts and shared modules imported by services at runtime:
+
+| Script | Used by |
+|---|---|
+| `dev_auth.py` | `run_services.py`, `timed_e2e_test.py`, `smoke_test.py` |
+| `infra_manager.py` | `run_services.py`, `timed_e2e_test.py` |
+| `memory_cache.py` | `retrieval-service`, `generation-service` |
+| `network_bootstrap.py` | `run_services.py`, `retrieval-service` |
+| `qdrant_client_factory.py` | `worker-service`, `retrieval-service` |
+| `timed_e2e_test.py` | standalone end-to-end test |
+
+Why:
+
+- `run_services.py` adds `scripts/` to `PYTHONPATH` so services can import shared modules
+- avoids duplicating utility code across each service directory
+- the shared modules are small, focused, and have no external dependencies beyond the project's `requirements.txt`
 
 ## Remaining Gaps
 
@@ -173,7 +210,9 @@ Still intentionally out of scope for this sprint:
 
 Validated during implementation:
 
-- updated Python services compile successfully with `python -m compileall`
-- `docker compose config` resolves successfully for the updated stack
+- Python services compile successfully with `python -m compileall`
+- `run_services.py` starts all API services without errors
+- `timed_e2e_test.py` validates the full query flow (auth → domain → ingest → generate)
+- embedding model (`intfloat/multilingual-e5-small`, 384 dimensions) is consistent between worker indexing and retrieval querying
 
-The remaining runtime verification step is a full `docker compose up --build` with a real Groq key or host Ollama available.
+*Last updated: June 2026*

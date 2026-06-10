@@ -12,13 +12,13 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     SERVICE_PORT: int = 8003
 
-    # Qdrant
-    QDRANT_URL: str = "http://qdrant:6333"
+    # Qdrant (QDRANT_PATH env used by qdrant_client_factory when set)
+    QDRANT_URL: str = "http://localhost:6333"
 
     # Redis + Postgres
-    REDIS_URL: str = "redis://redis:6379/0"
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@postgres:5432/domain_db"
-    DOMAIN_SERVICE_URL: str = "http://domain-service:8001"
+    REDIS_URL: str = "redis://localhost:6379/0"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/domain_db"
+    DOMAIN_SERVICE_URL: str = "http://localhost:8001"
     INTERNAL_API_KEY: str = "rag-internal-dev-key-change-in-prod"
 
     # Retrieval pipeline
@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     RERANKER_MODEL: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
 
     # Embedding model
-    EMBEDDING_MODEL: str = "intfloat/multilingual-e5-base"
-    EMBEDDING_DIMENSION: int = 768
+    EMBEDDING_MODEL: str = "intfloat/multilingual-e5-small"
+    EMBEDDING_DIMENSION: int = 384
 
 
 settings = Settings()

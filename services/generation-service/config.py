@@ -13,16 +13,13 @@ class Settings(BaseSettings):
     SERVICE_PORT: int = 8004
     HOST: str = "0.0.0.0"
 
-    REDIS_URL: str = "redis://redis:6379/0"
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@postgres:5432/domain_db"
-    DOMAIN_SERVICE_URL: str = "http://domain-service:8001"
-    RETRIEVAL_SERVICE_URL: str = "http://retrieval-service:8003"
+    REDIS_URL: str = "redis://localhost:6379/0"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/domain_db"
+    DOMAIN_SERVICE_URL: str = "http://localhost:8001"
+    RETRIEVAL_SERVICE_URL: str = "http://localhost:8003"
 
-    KEYCLOAK_ISSUER: str = (
-        "http://keycloak:8080/realms/rag-system,"
-        "http://localhost:8180/realms/rag-system"
-    )
-    KEYCLOAK_REALM_URL: str = "http://keycloak:8080/realms/rag-system"
+    KEYCLOAK_ISSUER: str = "http://localhost:8180/realms/rag-system"
+    KEYCLOAK_REALM_URL: str = "http://localhost:8180/realms/rag-system"
     KEYCLOAK_CLIENT_ID: str = "domain-service"
     KEYCLOAK_ALGORITHM: str = "RS256"
     KEYCLOAK_PUBLIC_KEY: str = ""
@@ -34,7 +31,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
-    OLLAMA_BASE_URL: str = "http://host.docker.internal:11434/v1"
+    OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
     OLLAMA_MODEL: str = "llama3.2:3b"
 
     CACHE_TTL_SECONDS: int = 3600

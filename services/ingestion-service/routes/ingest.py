@@ -1,4 +1,9 @@
+import os
+import subprocess
+import sys
 import uuid
+from pathlib import Path
+
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 
 from celery import Celery
@@ -10,6 +15,29 @@ from dependencies import CurrentUser, check_domain_access
 router = APIRouter()
 
 celery_app = Celery("ingestion", broker=settings.redis_url)
+ROOT = Path(__file__).resolve().parents[3]
+WORKER_DIR = ROOT / "services" / "worker-service"
+SYNC_INGESTION = os.getenv("SYNC_INGESTION", "").lower() in {"1", "true", "yes"}
+
+
+def _enqueue_processing(document_id: str) -> None:
+    env = os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONPATH", str(ROOT / "scripts"))
+
+    if SYNC_INGESTION:
+        subprocess.Popen(
+            [sys.executable, "-m", "tasks.run_document", document_id],
+            cwd=WORKER_DIR,
+            env=env,
+        )
+        return
+
+    celery_app.send_task(
+        TaskEnum.PROCESS_DOCUMENT,
+        args=[document_id],
+        queue=QueueEnum.INGESTION,
+    )
 
 
 @router.post("/ingest", status_code=202)
@@ -68,12 +96,8 @@ async def ingest_document(
         document_id=document_id,
     )
 
-    # 5. Enqueue processing job — worker picks it up asynchronously
-    celery_app.send_task(
-        TaskEnum.PROCESS_DOCUMENT,
-        args=[document_id],
-        queue=QueueEnum.INGESTION,
-    )
+    # 5. Enqueue processing job (Celery worker or local subprocess)
+    _enqueue_processing(document_id)
 
     return {
         "document_id": document_id,

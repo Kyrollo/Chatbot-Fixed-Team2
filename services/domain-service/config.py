@@ -13,10 +13,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://postgres:123456@localhost:5432/domain_db"
 
     # Keycloak
-    KEYCLOAK_ISSUER: str = (
-        "http://localhost:8180/realms/rag-system,"
-        "http://keycloak:8080/realms/rag-system"
-    )
+    KEYCLOAK_ISSUER: str = "http://localhost:8180/realms/rag-system"
     KEYCLOAK_REALM_URL: str = "http://localhost:8180/realms/rag-system"
     KEYCLOAK_PUBLIC_KEY: str = ""  # PEM body (without header/footer) or full PEM
     KEYCLOAK_CLIENT_ID: str = "domain-service"
@@ -30,7 +27,7 @@ class Settings(BaseSettings):
     SERVICE_NAME: str = "domain-service"
 
     # Internal service-to-service auth (shared secret for /internal endpoints)
-    INTERNAL_API_KEY: str = "change-me-internal-key"
+    INTERNAL_API_KEY: str = "rag-internal-dev-key-change-in-prod"
 
     # Default RAG config values for new domains
     DEFAULT_LLM_ROUTE: str = "default"

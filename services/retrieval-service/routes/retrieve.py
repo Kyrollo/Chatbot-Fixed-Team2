@@ -8,7 +8,14 @@ from services.retrieval_service import RetrievalService
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_retrieval_service = RetrievalService()
+_service: RetrievalService | None = None
+
+
+def _get_service() -> RetrievalService:
+    global _service
+    if _service is None:
+        _service = RetrievalService()
+    return _service
 
 
 @router.post(
@@ -18,7 +25,7 @@ _retrieval_service = RetrievalService()
 )
 async def retrieve(request: RetrievalRequest) -> RetrievalResponse:
     try:
-        return await _retrieval_service.retrieve(request)
+        return await _get_service().retrieve(request)
     except Exception as exc:
         logger.exception("Retrieval failed: %s", exc)
         raise HTTPException(

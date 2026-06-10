@@ -1,0 +1,48 @@
+# =============================================================================
+# RAG System — Unified Requirements (Windows 10/11, Python 3.11–3.13, CPU)
+# Install:  python -m venv .venv && .venv\Scripts\pip install -r requirements.txt
+# =============================================================================
+
+# -- PyTorch CPU wheels (no NVIDIA GPU required) --------------------------------
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# -- Web framework (all FastAPI services) ---------------------------------------
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-multipart==0.0.20
+httpx==0.28.1
+
+# -- Auth -----------------------------------------------------------------------
+python-jose[cryptography]==3.3.0
+
+# -- Database -------------------------------------------------------------------
+sqlalchemy==2.0.36
+asyncpg==0.30.0
+psycopg2-binary==2.9.10
+alembic==1.14.0
+greenlet==3.1.1
+
+# -- Queue / cache --------------------------------------------------------------
+celery==5.4.0
+redis==5.2.1
+
+# -- Vector DB ------------------------------------------------------------------
+qdrant-client==1.12.1
+
+# -- ML / embeddings (CPU — laptop friendly) ------------------------------------
+torch==2.6.0
+sentence-transformers==3.3.1
+numpy==2.2.1
+
+# -- PDF ingestion (worker) -----------------------------------------------------
+pymupdf==1.25.2
+pytesseract==0.3.13
+Pillow==11.1.0
+
+# -- Utilities ------------------------------------------------------------------
+python-dotenv==1.0.1
+aiofiles==24.1.0
+requests==2.32.3
+truststore==0.10.0

@@ -6,21 +6,26 @@ Indexing step — writes embedded chunks to:
 Both use the same domain_id as the namespace key.
 """
 import os
-from qdrant_client import QdrantClient
+import sys
+from pathlib import Path
+
 from qdrant_client.models import VectorParams, Distance, PointStruct, UpdateStatus
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 
 load_dotenv()
 
-QDRANT_URL    = os.getenv("QDRANT_URL",   "http://localhost:6333")
-EMBEDDING_DIM = 768
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "scripts"))
+from qdrant_client_factory import sync_qdrant_client  # noqa: E402
+
+EMBEDDING_DIM = 384
 
 # Sync SQLAlchemy engine — Celery workers are synchronous
 _raw_url     = os.getenv("SYNC_DATABASE_URL") or os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/domain_db")
 DATABASE_URL = _raw_url.replace("postgresql+asyncpg://", "postgresql://")
 
-_qdrant = QdrantClient(url=QDRANT_URL)
+_qdrant = sync_qdrant_client()
 _engine = create_engine(DATABASE_URL)
 
 # Flag so we only run CREATE TABLE once per worker process lifetime
@@ -69,7 +74,7 @@ def _ensure_chunk_table():
         conn.commit()
 
     _chunk_table_ready = True
-    print("  ✓ document_chunks table ready")
+    print("  document_chunks table ready")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -84,9 +89,9 @@ def _ensure_collection(domain_id: str):
             collection_name=domain_id,
             vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
         )
-        print(f"  ✓ Created Qdrant collection: {domain_id}")
+        print(f"  Created Qdrant collection: {domain_id}")
     else:
-        print(f"  ✓ Qdrant collection exists: {domain_id}")
+        print(f"  Qdrant collection exists: {domain_id}")
 
 
 def index_chunks(chunks: list[dict]) -> int:
@@ -124,7 +129,7 @@ def index_chunks(chunks: list[dict]) -> int:
         if result.status == UpdateStatus.COMPLETED:
             total += len(batch)
 
-    print(f"  ✓ Qdrant: indexed {total}/{len(chunks)} chunks into '{domain_id}'")
+    print(f"  Qdrant: indexed {total}/{len(chunks)} chunks into '{domain_id}'")
     return total
 
 
@@ -174,7 +179,7 @@ def index_chunks_postgres(chunks: list[dict]) -> int:
             )
         conn.commit()
 
-    print(f"  ✓ PostgreSQL: indexed {len(chunks)} chunks (BM25 ready)")
+    print(f"  PostgreSQL: indexed {len(chunks)} chunks (BM25 ready)")
     return len(chunks)
 
 
@@ -196,4 +201,4 @@ def update_document_status(document_id: str, status: str, error_msg: str = None)
             {"status": status, "error_msg": error_msg, "document_id": document_id},
         )
         conn.commit()
-    print(f"  ✓ Document {document_id} status → {status}")
+    print(f"  Document {document_id} status -> {status}")

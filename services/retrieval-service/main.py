@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+import network_bootstrap  # noqa: F401, E402
+
 import logging
 
 import uvicorn
@@ -24,17 +30,6 @@ app.include_router(retrieve_router, prefix="/api/v1", tags=["Retrieval"])
 @app.get("/health", tags=["Health"])
 async def health() -> dict:
     return {"status": "ok", "service": settings.SERVICE_NAME}
-
-
-@app.on_event("startup")
-async def _startup() -> None:
-    logger.info("Starting %s ...", settings.SERVICE_NAME)
-    from services.embedding import get_embedding_service
-    from services.reranker import get_reranker_service
-
-    get_embedding_service()
-    get_reranker_service()
-    logger.info("Model loaded. Service ready.")
 
 
 @app.on_event("shutdown")

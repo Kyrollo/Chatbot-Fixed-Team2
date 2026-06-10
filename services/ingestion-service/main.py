@@ -7,9 +7,9 @@ from routes.ingest import router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_tables()
-    print("✓ Database tables ready")
+    print("Database tables ready")
     yield
-    print("✓ Shutting down")
+    print("Shutting down")
 
 
 app = FastAPI(

@@ -1,24 +1,48 @@
-import logging
+"""
+HuggingFace offline-mode bootstrap — MUST be imported before any
+sentence_transformers / transformers import happens.
+
+On Windows, SentenceTransformer.__init__ calls find_adapter_config_file
+which enters cached_file → cached_files in transformers/utils/hub.py.
+That network-probing call stack is deep enough (C→Python callbacks) to
+exceed Python's default 1 000-frame recursion limit, raising:
+    RecursionError: maximum recursion depth exceeded while calling a Python object
+
+Setting HF_HUB_OFFLINE=1 + TRANSFORMERS_OFFLINE=1 *before* the first
+import of sentence_transformers/transformers makes those hub utilities
+return immediately without touching the network, so the deep call stack
+is never entered.
+
+The model (intfloat/multilingual-e5-small) is already fully cached in
+~/.cache/huggingface/hub, so offline mode is completely safe here.
+"""
+
+from __future__ import annotations
+
 import os
 import sys
-from functools import lru_cache
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
-import network_bootstrap  # noqa: F401, E402
+# Must be set before any HuggingFace / transformers import.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
-from config import settings
+# Prevent PyTorch from probing/loading CUDA DLLs — saves ~200 MB commit charge.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+# Skip TorchScript JIT compilation — reduces memory and avoids background threads.
+os.environ.setdefault("PYTORCH_JIT", "0")
 
-logger = logging.getLogger(__name__)
+# Belt-and-suspenders: raise the limit well above the HF hub call depth.
+# The HF hub stack on Windows can reach ~3 000 frames; 10 000 gives a
+# generous buffer while still catching genuine infinite-recursion bugs.
+sys.setrecursionlimit(10_000)
 
 # ---------------------------------------------------------------------------
-# Disable memory-mapping in safetensors on Windows (same patch as hf_env.py).
+# Disable memory-mapping in safetensors on Windows.
 #
 # safetensors.safe_open() defaults to mmap, which requires Windows commit
-# charge equal to the mapped file size.  When multiple services are running,
+# charge equal to the mapped file size. When multiple services are running,
 # this exhausts the commit limit, causing:
 #     OSError: The paging file is too small … (os error 1455)
-# or  [WinError 1114] A dynamic link library (DLL) initialization routine failed.
 #
 # Strategy (three tiers):
 #   1. Try safe_open(disable_mmap=True) — works on safetensors >= 0.4.5
@@ -27,12 +51,8 @@ logger = logging.getLogger(__name__)
 #      plain Python file I/O (struct + read), no mmap, no commit charge
 # ---------------------------------------------------------------------------
 if os.name == "nt":
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
-    os.environ.setdefault("PYTORCH_JIT", "0")
     try:
-        import safetensors as _st
+        import safetensors as _st                          # lightweight Rust ext — no torch
 
         _orig_safe_open = _st.safe_open
 
@@ -43,9 +63,12 @@ if os.name == "nt":
               [8 bytes: header_size as uint64 LE]
               [header_size bytes: JSON metadata]
               [remaining bytes: raw tensor data]
+
+            This reader parses the header, seeks to each tensor's offsets,
+            and builds torch tensors via torch.frombuffer — zero mmap.
             """
 
-            _DTYPE_MAP = None
+            _DTYPE_MAP = None  # populated lazily to avoid importing torch at patch time
 
             def __init__(self, filename, framework="pt", device="cpu"):
                 import json
@@ -103,6 +126,7 @@ if os.name == "nt":
             try:
                 return _orig_safe_open(*args, **kwargs)
             except TypeError:
+                # safetensors build lacks disable_mmap — try without it
                 kwargs.pop("disable_mmap", None)
                 try:
                     return _orig_safe_open(*args, **kwargs)
@@ -114,38 +138,3 @@ if os.name == "nt":
     except ImportError:
         pass
 
-
-class EmbeddingService:
-    """
-    Loads intfloat/multilingual-e5-small once and exposes embed_query().
-
-    Query prefix must be "query: " — the worker service indexes documents
-    with "passage: " prefix. Both sides must stay consistent or retrieval
-    quality degrades significantly.
-
-    NOTE: SentenceTransformer (and therefore PyTorch) is imported lazily
-    inside __init__, NOT at module level. This prevents ~3 GB of PyTorch
-    DLLs from loading at uvicorn startup, avoiding WinError 1114 / 1455
-    when multiple services compete for Windows commit charge.
-    """
-
-    def __init__(self) -> None:
-        logger.info("Loading embedding model: %s", settings.EMBEDDING_MODEL)
-        from sentence_transformers import SentenceTransformer  # noqa: PLC0415
-
-        self._model = SentenceTransformer(settings.EMBEDDING_MODEL)
-        logger.info("Embedding model ready.")
-
-    def embed_query(self, query: str) -> list[float]:
-        vector = self._model.encode(
-            f"query: {query}",
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        )
-        return vector.tolist()
-
-
-@lru_cache(maxsize=1)
-def get_embedding_service() -> EmbeddingService:
-    """Singleton — model is loaded once, reused for every request."""
-    return EmbeddingService()

@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
-    OLLAMA_BASE_URL: str = "http://host.docker.internal:11434/v1"
+    OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
     OLLAMA_MODEL: str = "llama3.2:3b"
 
 

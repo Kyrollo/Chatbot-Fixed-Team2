@@ -1,16 +1,25 @@
 import hashlib
 import json
+import sys
 from functools import lru_cache
+from pathlib import Path
 
 from redis.asyncio import Redis
 
 from config import settings
 from schemas.retrieval import RetrievalResponse
 
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "scripts"))
+from memory_cache import MemoryTTLCache  # noqa: E402
+
 
 class RetrievalCache:
     def __init__(self) -> None:
-        self._client = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        self._memory = MemoryTTLCache[str]()
+        self._client: Redis | None = None
+        if settings.REDIS_URL and settings.REDIS_URL != "memory://":
+            self._client = Redis.from_url(settings.REDIS_URL, decode_responses=True, protocol=2)
 
     @staticmethod
     def _key(domain_id: str, query: str, top_k_retrieve: int, top_k_rerank: int) -> str:
@@ -27,9 +36,15 @@ class RetrievalCache:
         top_k_retrieve: int,
         top_k_rerank: int,
     ) -> RetrievalResponse | None:
-        payload = await self._client.get(
-            self._key(domain_id, query, top_k_retrieve, top_k_rerank)
-        )
+        key = self._key(domain_id, query, top_k_retrieve, top_k_rerank)
+        if self._client is None:
+            payload = self._memory.get(key)
+        else:
+            try:
+                payload = await self._client.get(key)
+            except Exception:
+                payload = self._memory.get(key)
+
         if not payload:
             return None
         data = json.loads(payload)
@@ -45,14 +60,20 @@ class RetrievalCache:
         top_k_rerank: int,
         response: RetrievalResponse,
     ) -> None:
-        await self._client.setex(
-            self._key(domain_id, query, top_k_retrieve, top_k_rerank),
-            settings.CACHE_TTL_SECONDS,
-            response.model_dump_json(),
-        )
+        key = self._key(domain_id, query, top_k_retrieve, top_k_rerank)
+        payload = response.model_dump_json()
+        if self._client is None:
+            self._memory.set(key, payload, settings.CACHE_TTL_SECONDS)
+            return
+        try:
+            await self._client.setex(key, settings.CACHE_TTL_SECONDS, payload)
+        except Exception:
+            self._memory.set(key, payload, settings.CACHE_TTL_SECONDS)
 
     async def close(self) -> None:
-        await self._client.aclose()
+        if self._client is not None:
+            await self._client.aclose()
+        self._memory.close()
 
 
 @lru_cache(maxsize=1)
