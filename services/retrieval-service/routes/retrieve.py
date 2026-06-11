@@ -1,0 +1,45 @@
+import logging
+
+from fastapi import APIRouter, HTTPException, status
+
+from schemas.retrieval import RetrievalRequest, RetrievalResponse
+from services.retrieval_service import RetrievalService
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+_service: RetrievalService | None = None
+
+
+def _get_service() -> RetrievalService:
+    """Lazy singleton — retries construction on subsequent requests if it failed before.
+
+    The old code would leave _service as None forever if __init__ threw,
+    permanently poisoning the endpoint.  Now we retry each time so transient
+    issues (model still downloading, Qdrant locked, etc.) can self-heal.
+    """
+    global _service
+    if _service is None:
+        try:
+            _service = RetrievalService()
+        except Exception:
+            logger.exception("Failed to initialise RetrievalService — will retry on next request")
+            raise
+    return _service
+
+
+@router.post(
+    "/retrieve",
+    response_model=RetrievalResponse,
+    summary="Retrieve relevant chunks for a query",
+)
+async def retrieve(request: RetrievalRequest) -> RetrievalResponse:
+    try:
+        svc = _get_service()
+        return await svc.retrieve(request)
+    except Exception as exc:
+        logger.exception("Retrieval failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Retrieval failed. Please try again.",
+        )

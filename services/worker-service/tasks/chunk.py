@@ -1,6 +1,15 @@
+from __future__ import annotations
+
 import re
+from typing import TYPE_CHECKING
+
 import numpy as np
-from sentence_transformers import SentenceTransformer
+
+if TYPE_CHECKING:
+    # Only imported for static analysis — never executed at runtime.
+    # chunk_pages receives the model instance from embed.get_model(),
+    # so no runtime import of sentence_transformers is needed here.
+    from sentence_transformers import SentenceTransformer
 
 # ------------------------------------------------------------------
 # Semantic Chunking using multilingual-e5-base
@@ -81,7 +90,7 @@ def chunk_pages(
             })
             chunk_index += 1
 
-    print(f"  Semantic chunking: {len(pages)} pages → {len(all_chunks)} chunks")
+    print(f"  Semantic chunking: {len(pages)} pages -> {len(all_chunks)} chunks")
     return all_chunks
 
 

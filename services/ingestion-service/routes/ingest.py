@@ -1,52 +1,90 @@
+import os
+import subprocess
+import sys
 import uuid
-from fastapi import APIRouter, UploadFile, File, Form, Header, HTTPException
+from pathlib import Path
+
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+
 from celery import Celery
 from storage import save_file, insert_document, get_document_status
 from config import settings
-from enums import FileTypeEnum, DocumentStatusEnum, UserRoleEnum, QueueEnum, TaskEnum
+from enums import FileTypeEnum, DocumentStatusEnum, QueueEnum, TaskEnum
+from dependencies import CurrentUser, check_domain_access
 
 router = APIRouter()
 
-celery_app = Celery("ingestion", broker=settings.redis_url)
 
-# Roles allowed to upload documents
-UPLOAD_ROLES = {UserRoleEnum.SYSTEM_ADMIN, UserRoleEnum.DOMAIN_ADMIN, UserRoleEnum.CONTRIBUTOR}
+@router.get("/ingest/health", tags=["health"])
+async def router_health_check():
+    return {"status": "ok", "service": "ingestion-service"}
+
+celery_app = Celery("ingestion", broker=settings.redis_url)
+ROOT = Path(__file__).resolve().parents[3]
+WORKER_DIR = ROOT / "services" / "worker-service"
+SYNC_INGESTION = os.getenv("SYNC_INGESTION", "").lower() in {"1", "true", "yes"}
+
+
+def _enqueue_processing(document_id: str) -> None:
+    env = os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONPATH", str(ROOT / "scripts"))
+
+    if SYNC_INGESTION:
+        subprocess.Popen(
+            [sys.executable, "-m", "tasks.run_document", document_id],
+            cwd=WORKER_DIR,
+            env=env,
+        )
+        return
+
+    celery_app.send_task(
+        TaskEnum.PROCESS_DOCUMENT,
+        args=[document_id],
+        queue=QueueEnum.INGESTION,
+    )
 
 
 @router.post("/ingest", status_code=202)
 async def ingest_document(
-    file:         UploadFile = File(...),
-    domain_id:    str        = Form(...),
-    x_user_id:    str        = Header(..., alias="x-user-id"),
-    x_user_roles: str        = Header(..., alias="x-user-roles"),
+    user: CurrentUser,
+    file: UploadFile = File(...),
+    domain_id: str = Form(...),
 ):
     """
     Accepts a PDF upload for a specific domain.
 
-    Steps:
-    1. Validate file extension
-    2. Read file bytes and check size
-    3. Check user has permission to upload
-    4. Save file to disk and insert record in Postgres (status=pending)
-    5. Push processing job to Redis queue
-    6. Return 202 with document_id for status polling
+    Auth flow:
+    1. JWT is validated by the get_current_user dependency (mandatory)
+    2. Domain-level RBAC is checked via domain-service internal endpoint
+       (user must be at least a contributor on this domain)
+    3. File is saved and a Celery job is enqueued
+    4. Returns 202 with document_id for status polling
     """
 
-    # 1. Validate file extension
+    # 1. Validate file type
     if not file.filename.lower().endswith(FileTypeEnum.PDF):
-        raise HTTPException(400, "Only PDF files accepted.")
+        raise HTTPException(400, "Only PDF files are accepted.")
 
-    # 2. Read file bytes and check size
+    # 2. Read and validate file size
     file_bytes = await file.read()
     if len(file_bytes) > settings.max_size_mb * 1024 * 1024:
-        raise HTTPException(400, f"File too large. Max {settings.max_size_mb}MB.")
+        raise HTTPException(400, f"File exceeds {settings.max_size_mb} MB limit.")
 
-    # 3. Check user has permission to upload
-    roles = {r.strip() for r in x_user_roles.split(",")}
-    if not roles.intersection(UPLOAD_ROLES):
-        raise HTTPException(403, "You do not have permission to upload documents.")
+    # 3. Domain RBAC check — must be at least a contributor
+    allowed = await check_domain_access(
+        user_id=user["user_id"],
+        domain_id=domain_id,
+        required_role="contributor",
+        is_system_admin=user["is_system_admin"],
+    )
+    if not allowed:
+        raise HTTPException(
+            403,
+            "You do not have contributor or higher access to this domain.",
+        )
 
-    # 4. Generate document ID, save file to disk, insert record in Postgres
+    # 4. Save file and create document record
     document_id = str(uuid.uuid4())
 
     file_path = await save_file(
@@ -57,38 +95,29 @@ async def ingest_document(
 
     await insert_document(
         domain_id=domain_id,
-        user_id=x_user_id,
+        user_id=user["user_id"],
         filename=file.filename,
         file_path=file_path,
         document_id=document_id,
     )
 
-    # 5. Push processing job to Redis queue — worker picks it up asynchronously
-    celery_app.send_task(
-        TaskEnum.PROCESS_DOCUMENT,
-        args=[document_id],
-        queue=QueueEnum.INGESTION,
-    )
+    # 5. Enqueue processing job (Celery worker or local subprocess)
+    _enqueue_processing(document_id)
 
-    # 6. Return 202 immediately — do not wait for processing
     return {
         "document_id": document_id,
-        "status":      DocumentStatusEnum.PENDING,
-        "message":     "Document accepted. Processing will begin shortly.",
+        "status": DocumentStatusEnum.PENDING,
+        "message": "Document accepted. Processing has been queued.",
     }
 
 
 @router.get("/ingest/{document_id}")
-async def get_status(
-    document_id: str,
-    x_user_id:   str = Header(..., alias="x-user-id"),
-):
+async def get_status(document_id: str, user: CurrentUser):
     """
     Poll the processing status of an uploaded document.
+    Requires a valid JWT — any authenticated user may check status.
     Returns: pending | processing | done | failed
     """
-
-    # Fetch current processing status from Postgres
     doc = await get_document_status(document_id)
     if not doc:
         raise HTTPException(404, "Document not found.")

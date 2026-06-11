@@ -1,4 +1,17 @@
-from sentence_transformers import SentenceTransformer
+from __future__ import annotations
+
+# HF_HUB_OFFLINE, TRANSFORMERS_OFFLINE, and sys.setrecursionlimit are all
+# set by hf_env.py, which worker.py imports first — before Celery loads
+# tasks.process → embed.py. No duplicate setup needed here.
+#
+# IMPORTANT: sentence_transformers (and therefore PyTorch) is imported
+# lazily inside get_model() — NOT at module level. Loading ~3 GB of PyTorch
+# DLLs at Celery startup exhausts the Windows paging file while other
+# services are also booting, causing [WinError 1455] and cascading
+# MemoryErrors. The import is deferred until the first document arrives.
+
+from typing import Any
+
 import numpy as np
 
 # ------------------------------------------------------------------
@@ -7,22 +20,67 @@ import numpy as np
 # Both embed.py and chunk.py use the same model instance.
 # ------------------------------------------------------------------
 
-_model: SentenceTransformer | None = None
+_model: Any = None  # SentenceTransformer, lazily loaded
 
-EMBEDDING_DIM = 768
+EMBEDDING_DIM = 384
 BATCH_SIZE    = 32
 
 
-def get_model() -> SentenceTransformer:
+MODEL_NAME = "intfloat/multilingual-e5-small"
+
+
+def get_model() -> Any:
     """
-    Returns the shared model instance.
-    Loads it on first call, then caches it for the lifetime of the worker.
+    Returns the shared SentenceTransformer instance.
+    Loaded once on first call (when the first document arrives), then
+    cached for the worker lifetime. PyTorch is NOT loaded at Celery
+    startup — only when this function is first called.
+
+    WHY lazy import?
+    ──────────────────────────────────────────────────────────────────
+    sentence_transformers imports torch at module level, which loads
+    ~3 GB of DLLs (torch_python.dll etc.). On Windows, loading these
+    while multiple other services are also starting exhausts the paging
+    file, causing [WinError 1455] in the worker and cascading
+    MemoryErrors in sibling processes (e.g. retrieval-service).
+    Deferring the import until the first document is processed means the
+    worker is idle and other services are already settled by then.
+
+    WHY HF_HUB_OFFLINE + TRANSFORMERS_OFFLINE?
+    ──────────────────────────────────────────────────────────────────
+    On Windows, Transformer.__init__ calls find_adapter_config_file which
+    enters cached_file → cached_files in transformers/utils/hub.py.  That
+    network-probing call stack is deep enough (C→Python callbacks) to exceed
+    Python's recursion limit (set to 10 000 by hf_env.py), raising:
+        RecursionError: maximum recursion depth exceeded while calling a Python object
+    Setting those env vars (done in hf_env.py before any import) makes hub
+    utilities return immediately without network access.
+
+    WHY explicit modules instead of SentenceTransformer(model_name)?
+    ──────────────────────────────────────────────────────────────────
+    intfloat/multilingual-e5-small does not ship a sentence_bert_config.json,
+    so sentence-transformers would fall back to another internal
+    SentenceTransformer() call, adding even more recursion depth.
+    Passing modules=[Transformer, Pooling] directly skips that path.
+
+    NOTE: do NOT pass config_args={"local_files_only": True} — that makes
+    AutoConfig look for a literal directory named "intfloat/multilingual-e5-small"
+    on disk instead of the HuggingFace cache, causing an OSError.
     """
     global _model
     if _model is None:
-        print("Loading multilingual-e5-base model...")
-        _model = SentenceTransformer("intfloat/multilingual-e5-base")
-        print("✓ Model loaded")
+        print(f"Loading {MODEL_NAME} model...")
+        # Lazy imports — torch loads here, not at Celery startup.
+        from sentence_transformers import SentenceTransformer          # noqa: PLC0415
+        from sentence_transformers import models as st_models          # noqa: PLC0415
+
+        transformer = st_models.Transformer(MODEL_NAME)
+        pooling = st_models.Pooling(
+            transformer.get_word_embedding_dimension(),
+            pooling_mode_mean_tokens=True,
+        )
+        _model = SentenceTransformer(modules=[transformer, pooling])
+        print("Model loaded")
     return _model
 
 
@@ -40,7 +98,7 @@ def embed_chunks(chunks: list[dict]) -> list[dict]:
         {
             "chunk_id":  "...",
             "text":      "...",
-            "embedding": [0.12, -0.34, ...],   ← 768 floats
+            "embedding": [0.12, -0.34, ...],   ← 384 floats
             ...
         }
     ]
@@ -61,5 +119,5 @@ def embed_chunks(chunks: list[dict]) -> list[dict]:
     for chunk, embedding in zip(chunks, embeddings):
         chunk["embedding"] = embedding.tolist()
 
-    print(f"  ✓ Embedded {len(chunks)} chunks — dim={EMBEDDING_DIM}")
+    print(f"  Embedded {len(chunks)} chunks — dim={EMBEDDING_DIM}")
     return chunks

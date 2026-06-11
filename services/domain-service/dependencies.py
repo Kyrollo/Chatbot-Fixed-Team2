@@ -87,6 +87,22 @@ def _decode_token(token: str) -> dict:
         except JWTError as exc:
             errors.append(f"{issuer}: {exc}")
 
+    # Fallback for local dev login (minted via dev_auth.py)
+    try:
+        import dev_auth
+        dev_pub = dev_auth.get_public_key_pem()
+        payload = jwt.decode(
+            token,
+            dev_pub,
+            algorithms=["RS256"],
+            audience=settings.KEYCLOAK_CLIENT_ID,
+            issuer=dev_auth.DEV_ISSUER,
+            options={"verify_aud": False},
+        )
+        return payload
+    except Exception as exc:
+        errors.append(f"dev_auth fallback: {exc}")
+
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=f"Invalid token: {' | '.join(errors)}",

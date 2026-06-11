@@ -123,3 +123,12 @@ class DomainConfig(Base):
     )
 
     domain: Mapped["Domain"] = relationship(back_populates="config")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(255), nullable=False)
+

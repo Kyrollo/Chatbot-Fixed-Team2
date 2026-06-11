@@ -30,7 +30,7 @@ def extract_text_from_pdf(file_path: str) -> list[dict]:
         # ── OCR fallback if page has no selectable text ───────────
         # This happens with scanned PDFs (image-only pages)
         if not text:
-            print(f"  Page {page_num + 1}: no text found → running OCR")
+            print(f"  Page {page_num + 1}: no text found -> running OCR")
             text = _ocr_page(page)
 
         if text:

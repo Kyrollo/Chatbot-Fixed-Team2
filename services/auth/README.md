@@ -4,7 +4,7 @@ Authentication and authorization are implemented using Keycloak.
 
 ## Realm
 
-rag-system
+`rag-system`
 
 ## Roles
 
@@ -17,19 +17,21 @@ rag-system
 
 - rag-ui
 - rag-api
+- domain-service
 
-## Startup
+## Local startup (no Docker)
 
-docker compose up -d
+Keycloak is started automatically by `python run_services.py` on port **8180**.
 
-Access:
+Admin console: http://localhost:8180
 
-http://localhost:8180
+Bootstrap admin: `admin` / `admin`
 
-## Import Realm
+Seeded realm users (from `realm-export.json`):
 
-Realm configuration is available in:
+| User | Password |
+|---|---|
+| admin | admin |
+| reader1 | reader1 |
 
-realm-export.json
-
-Import using Keycloak import functionality.
+Realm config: `services/auth/realm-export.json`

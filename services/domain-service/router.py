@@ -20,6 +20,60 @@ from schemas import (
 # ---------- Domain & member router ----------
 router = APIRouter(prefix="/domains", tags=["domains"])
 
+from fastapi import HTTPException
+from sqlalchemy import select
+from models import User
+import dev_auth
+from schemas import LoginRequest, LoginResponse
+
+@router.get("/health", tags=["health"])
+async def router_health_check():
+    return {"status": "ok", "service": "domain-service"}
+
+
+@router.post("/auth/login", response_model=LoginResponse)
+async def login(payload: LoginRequest, db: DBSession):
+    user_id = payload.user_id.strip()
+    
+    # 1. Fetch user by user_id from database
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Unauthorized: User ID '{user_id}' not found in the system database.",
+        )
+    
+    # 2. Map role to JWT realm roles
+    roles = []
+    if user.role == "system_admin":
+        roles = ["system_admin", "domain_admin", "contributor", "reader"]
+    elif user.role == "domain_admin":
+        roles = ["domain_admin", "contributor", "reader"]
+    elif user.role == "contributor":
+        roles = ["contributor", "reader"]
+    elif user.role == "reader":
+        roles = ["reader"]
+    else:
+        roles = []
+        
+    # 3. Mint JWT access token using the dev auth helper
+    token = dev_auth.mint_token(
+        user_id=user.id,
+        username=user.name.lower().replace(" ", "_"),
+        roles=roles,
+        email=f"{user.id}@rag.local",
+    )
+    
+    return LoginResponse(
+        token=token,
+        user_id=user.id,
+        username=user.name,
+        role=user.role,
+        roles=roles
+    )
+
 
 @router.post("", response_model=DomainResponse, status_code=status.HTTP_201_CREATED)
 async def create_domain(payload: DomainCreate, db: DBSession, admin: SystemAdmin):

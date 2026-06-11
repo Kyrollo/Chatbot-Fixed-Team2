@@ -1,11 +1,3 @@
-celery==5.3.6
-redis==5.0.4
-sqlalchemy==2.0.30
-psycopg2-binary==2.9.9
-pymupdf==1.24.3
-pytesseract==0.3.10
-Pillow==10.3.0
-sentence-transformers==3.0.1
-qdrant-client==1.9.1
-python-dotenv==1.0.1
-numpy==1.26.4
+# Use the unified project requirements (all services share one venv):
+#   pip install -r ../../requirements.txt
+-r ../../requirements.txt
