@@ -84,3 +84,17 @@ class AccessCheckResponse(BaseModel):
     allowed: bool
     role: RoleEnum | None = None
     reason: str | None = None
+
+
+# ---------- Authentication Schemas ----------
+class LoginRequest(BaseModel):
+    user_id: str
+
+
+class LoginResponse(BaseModel):
+    token: str
+    user_id: str
+    username: str
+    role: str
+    roles: list[str]
+

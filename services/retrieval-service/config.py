@@ -25,7 +25,9 @@ class Settings(BaseSettings):
     TOP_K_RETRIEVE: int = 20
     TOP_K_RERANK: int = 5
     CACHE_TTL_SECONDS: int = 3600
+    #cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
     RERANKER_MODEL: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+
 
     # Embedding model
     EMBEDDING_MODEL: str = "intfloat/multilingual-e5-small"

@@ -70,7 +70,7 @@ def mint_token(
     username: str,
     roles: list[str],
     email: str | None = None,
-    expires_minutes: int = 60,
+    expires_minutes: int = 1440,  # 24 hours — was 60
 ) -> str:
     now = datetime.now(timezone.utc)
     payload = {
@@ -88,7 +88,7 @@ def mint_token(
     return jwt.encode(payload, get_private_key_pem(), algorithm="RS256")
 
 
-# Seeded users from realm-export.json (passwords only needed if Keycloak is used)
+# Seeded users from realm-export.json
 DEV_USERS = {
     "admin": {
         "user_id": "652ec45e-1b68-478c-9bd3-81cc46fb24a9",
@@ -118,8 +118,35 @@ def token_for(user_key: str) -> str:
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate a dev JWT token")
+    parser.add_argument(
+        "--role",
+        default="admin",
+        choices=list(DEV_USERS.keys()),
+        help="User to generate token for (default: admin)",
+    )
+    parser.add_argument(
+        "--expire",
+        type=int,
+        default=1440,
+        help="Token lifetime in minutes (default: 1440 = 24 hours)",
+    )
+    args = parser.parse_args()
+
     print("Dev auth public key body (set as KEYCLOAK_PUBLIC_KEY):")
     print(get_public_key_body())
     print()
-    print("Sample admin token:")
-    print(token_for("admin"))
+
+    spec = DEV_USERS[args.role]
+    token = mint_token(
+        user_id=spec["user_id"],
+        username=spec["username"],
+        roles=spec["roles"],
+        expires_minutes=args.expire,
+    )
+    hours = args.expire // 60
+    mins = args.expire % 60
+    print(f"Sample {args.role} token (valid for {hours}h {mins}m):")
+    print(token)

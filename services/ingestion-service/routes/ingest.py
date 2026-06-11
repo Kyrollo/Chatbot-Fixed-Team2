@@ -42,15 +42,15 @@ def _enqueue_processing(document_id: str) -> None:
 
 @router.post("/ingest", status_code=202)
 async def ingest_document(
+    user: CurrentUser,
     file: UploadFile = File(...),
     domain_id: str = Form(...),
-    user: CurrentUser = None,
 ):
     """
     Accepts a PDF upload for a specific domain.
 
     Auth flow:
-    1. JWT is validated by the get_current_user dependency
+    1. JWT is validated by the get_current_user dependency (mandatory)
     2. Domain-level RBAC is checked via domain-service internal endpoint
        (user must be at least a contributor on this domain)
     3. File is saved and a Celery job is enqueued
@@ -107,9 +107,10 @@ async def ingest_document(
 
 
 @router.get("/ingest/{document_id}")
-async def get_status(document_id: str, user: CurrentUser = None):
+async def get_status(document_id: str, user: CurrentUser):
     """
     Poll the processing status of an uploaded document.
+    Requires a valid JWT — any authenticated user may check status.
     Returns: pending | processing | done | failed
     """
     doc = await get_document_status(document_id)

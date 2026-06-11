@@ -80,8 +80,9 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
         out["REDIS_URL"]        = "memory://"
         out["SYNC_INGESTION"]   = "1"
 
-    out["QDRANT_PATH"] = str(ROOT / "data" / "qdrant")
-    out.pop("QDRANT_URL", None)
+    # Use Qdrant Docker server instead of embedded file storage
+    out["QDRANT_URL"] = "http://localhost:6333"
+    out.pop("QDRANT_PATH", None)
 
     out["DOMAIN_SERVICE_URL"]     = "http://localhost:8001"
     out["INGESTION_SERVICE_URL"]  = "http://localhost:8002"
@@ -95,16 +96,11 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
     )
     out.setdefault("PYTHONIOENCODING", "utf-8")
 
-    if use_keycloak:
-        out["KEYCLOAK_ISSUER"]      = "http://localhost:8180/realms/rag-system"
-        out["KEYCLOAK_REALM_URL"]   = "http://localhost:8180/realms/rag-system"
-        out["KEYCLOAK_PUBLIC_KEY"]  = ""
-    else:
-        from dev_auth import DEV_ISSUER, get_public_key_body  # noqa: PLC0415
+    from dev_auth import DEV_ISSUER, get_public_key_body  # noqa: PLC0415
 
-        out["KEYCLOAK_ISSUER"]     = DEV_ISSUER
-        out["KEYCLOAK_REALM_URL"]  = DEV_ISSUER
-        out["KEYCLOAK_PUBLIC_KEY"] = get_public_key_body()
+    out["KEYCLOAK_ISSUER"]     = DEV_ISSUER
+    out["KEYCLOAK_REALM_URL"]  = DEV_ISSUER
+    out["KEYCLOAK_PUBLIC_KEY"] = get_public_key_body()
 
     out.setdefault("INTERNAL_API_KEY",    "rag-internal-dev-key-change-in-prod")
     out.setdefault("OPENBLAS_NUM_THREADS", "1")
@@ -160,7 +156,6 @@ def load_root_env(use_keycloak: bool, use_redis: bool) -> dict[str, str]:
 
 def start_uvicorn(service: dict, env: dict[str, str], reload: bool) -> subprocess.Popen:
     Path(env["UPLOAD_DIR"]).mkdir(parents=True, exist_ok=True)
-    Path(env["QDRANT_PATH"]).mkdir(parents=True, exist_ok=True)
     cmd = [PYTHON, "-m", "uvicorn", service["app"], "--host", "0.0.0.0", "--port", str(service["port"])]
     if reload:
         cmd.append("--reload")
@@ -180,20 +175,12 @@ def start_worker(env: dict[str, str]) -> subprocess.Popen:
 
 
 def purge_ingestion_queue() -> None:
-    """Remove stale Celery tasks from the Redis ingestion queue.
-
-    When the worker starts, it immediately picks up any tasks left in the
-    queue from previous runs.  Those stale tasks cause failures (expired
-    tokens, missing files, paging-file errors) and are never what the user
-    wants.  Purging ensures the worker starts idle and only processes new
-    tasks submitted by timed_e2e_test.py or similar scripts.
-    """
+    """Remove stale Celery tasks from the Redis ingestion queue."""
     try:
         import redis as redis_lib  # noqa: PLC0415
 
         r = redis_lib.Redis(host="localhost", port=6379, db=0, socket_timeout=5)
         count = r.llen("ingestion")
-        # Delete queue + Celery bookkeeping keys for unacknowledged messages
         r.delete("ingestion", "unacked", "unacked_index", "unacked_mutex")
         if count:
             print(f"  Purged {count} stale task(s) from ingestion queue")
@@ -256,7 +243,7 @@ def main() -> int:
     print(f"\n[2/3] Configuration")
     print(f"  Python:     {PYTHON}")
     print(f"  PostgreSQL: localhost:5432")
-    print(f"  Qdrant:     embedded at {env['QDRANT_PATH']}")
+    print(f"  Qdrant:     server at {env['QDRANT_URL']}")
     print(f"  Auth:       {'Keycloak http://localhost:8180' if use_keycloak else 'dev JWT fallback'}")
     print(f"  Redis:      {'localhost:6379' if use_redis else 'unavailable (sync ingestion + memory cache)'}")
     if not args.worker:
@@ -270,17 +257,10 @@ def main() -> int:
             proc = start_uvicorn(svc, env, reload=not args.no_reload)
             attach_output_logger(svc["name"], proc)
             processes.append((svc["name"], proc))
-            # 5-second stagger: lets each service finish loading its libs
-            # before the next process starts. Prevents simultaneous DLL loads
-            # from exhausting the Windows paging file (WinError 1455).
             time.sleep(5)
 
         if args.worker and use_redis:
-            # Purge stale tasks so the worker starts clean — ingestion
-            # should only be triggered by test scripts, not old queue items.
             purge_ingestion_queue()
-            # Extra pause after all API services: let them settle before
-            # PyTorch (~3 GB of DLLs) loads inside the worker process.
             time.sleep(10)
             worker_proc = start_worker(env)
             attach_output_logger(WORKER["name"], worker_proc)

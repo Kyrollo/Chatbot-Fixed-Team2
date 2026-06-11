@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/domain_db"
     DOMAIN_SERVICE_URL: str = "http://localhost:8001"
+    INTERNAL_API_KEY: str = "rag-internal-dev-key-change-in-prod"
+    SYSTEM_ADMIN_ROLE: str = "system_admin"
+
+    # Retrieval service
     RETRIEVAL_SERVICE_URL: str = "http://localhost:8003"
 
     KEYCLOAK_ISSUER: str = "http://localhost:8180/realms/rag-system"
@@ -23,9 +27,6 @@ class Settings(BaseSettings):
     KEYCLOAK_CLIENT_ID: str = "domain-service"
     KEYCLOAK_ALGORITHM: str = "RS256"
     KEYCLOAK_PUBLIC_KEY: str = ""
-    SYSTEM_ADMIN_ROLE: str = "system_admin"
-
-    INTERNAL_API_KEY: str = "rag-internal-dev-key-change-in-prod"
 
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
     GROQ_API_KEY: str = ""

@@ -7,6 +7,7 @@ from urllib.request import urlopen
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
+import httpx
 
 from config import settings
 
@@ -98,3 +99,41 @@ async def get_current_user(
 
 
 CurrentUser = Annotated[dict, Depends(get_current_user)]
+
+
+# ---------- Domain RBAC check via domain-service ----------
+
+async def check_domain_access(
+    user_id: str,
+    domain_id: str,
+    required_role: str,
+    is_system_admin: bool = False,
+) -> bool:
+    """
+    Calls domain-service /internal/check-access to verify per-domain RBAC.
+    Returns True if allowed, False otherwise.
+    On connection failure → raises 503.
+    """
+    if is_system_admin:
+        return True
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.post(
+                f"{settings.DOMAIN_SERVICE_URL}/internal/check-access",
+                json={
+                    "user_id": user_id,
+                    "domain_id": domain_id,
+                    "required_role": required_role,
+                },
+                headers={"X-Internal-Key": settings.INTERNAL_API_KEY},
+            )
+            if resp.status_code == 200:
+                return resp.json().get("allowed", False)
+            return False
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Domain service unreachable: {exc}",
+        ) from exc
+

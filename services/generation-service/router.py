@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 
 from cache import get_generation_cache
 from config import settings
-from dependencies import CurrentUser
+from dependencies import CurrentUser, check_domain_access
 from llm_router import LLMRouter
 from prompt_builder import build_messages
 from schemas import Citation, QueryRequest, QueryResponse
@@ -17,7 +17,7 @@ from schemas import Citation, QueryRequest, QueryResponse
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/generate", tags=["generation"])
 
-_http = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0))
+_http = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0))
 _llm_router = LLMRouter()
 _cache = get_generation_cache()
 _engine = create_async_engine(settings.DATABASE_URL, echo=False)
@@ -105,6 +105,19 @@ async def health() -> dict:
 
 @router.post("/query", response_model=QueryResponse)
 async def generate_query(request: QueryRequest, user: CurrentUser) -> QueryResponse | StreamingResponse:
+    # Domain-level RBAC: user must have at least reader access
+    allowed = await check_domain_access(
+        user_id=user["user_id"],
+        domain_id=request.domain_id,
+        required_role="reader",
+        is_system_admin=user.get("is_system_admin", False),
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have reader or higher access to this domain.",
+        )
+
     cached = await _cache.get(domain_id=request.domain_id, query=request.query)
     if cached is not None and not request.stream:
         return cached
