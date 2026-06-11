@@ -3,7 +3,7 @@
 Launch full RAG stack locally (no Docker).
 
 Startup order:
-  1. Keycloak (auth) on http://localhost:8180
+  1. Keycloak (auth) on http://localhost:8080
   2. Redis on localhost:6379
   3. FastAPI services on ports 8001-8004 (+ optional 8005)
   4. Celery worker — only when --worker flag is given
@@ -64,56 +64,99 @@ def ensure_python_runtime() -> None:
         raise SystemExit(1)
 
 
+from urllib.parse import quote
+import os
+
 def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool) -> dict[str, str]:
     out = dict(env)
 
+    # ─────────────────────────────────────────────
+    # Database
+    # ─────────────────────────────────────────────
     user     = out.get("POSTGRES_USER", "postgres")
     password = quote(out.get("POSTGRES_PASSWORD", "postgres"), safe="")
     db       = out.get("POSTGRES_DB", "domain_db")
-    out["DATABASE_URL"]      = f"postgresql+asyncpg://{user}:{password}@localhost:5432/{db}"
+
+    out["DATABASE_URL"] = f"postgresql+asyncpg://{user}:{password}@localhost:5432/{db}"
     out["SYNC_DATABASE_URL"] = f"postgresql://{user}:{password}@localhost:5432/{db}"
 
+    # ─────────────────────────────────────────────
+    # Redis
+    # ─────────────────────────────────────────────
     if use_redis:
         out["REDIS_URL"] = "redis://localhost:6379/0"
         out.pop("SYNC_INGESTION", None)
     else:
-        out["REDIS_URL"]        = "memory://"
-        out["SYNC_INGESTION"]   = "1"
+        out["REDIS_URL"] = "memory://"
+        out["SYNC_INGESTION"] = "1"
 
+    # ─────────────────────────────────────────────
+    # Qdrant
+    # ─────────────────────────────────────────────
     out["QDRANT_PATH"] = str(ROOT / "data" / "qdrant")
     out.pop("QDRANT_URL", None)
 
-    out["DOMAIN_SERVICE_URL"]     = "http://localhost:8001"
-    out["INGESTION_SERVICE_URL"]  = "http://localhost:8002"
-    out["RETRIEVAL_SERVICE_URL"]  = "http://localhost:8003"
+    # ─────────────────────────────────────────────
+    # Services
+    # ─────────────────────────────────────────────
+    out["DOMAIN_SERVICE_URL"] = "http://localhost:8001"
+    out["INGESTION_SERVICE_URL"] = "http://localhost:8002"
+    out["RETRIEVAL_SERVICE_URL"] = "http://localhost:8003"
     out["GENERATION_SERVICE_URL"] = "http://localhost:8004"
     out["EVALUATION_SERVICE_URL"] = "http://localhost:8005"
-    out["UPLOAD_DIR"]             = str(ROOT / "data" / "uploads")
+
+    out["UPLOAD_DIR"] = str(ROOT / "data" / "uploads")
+
     out.setdefault("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+
+    # ─────────────────────────────────────────────
+    # Python runtime
+    # ─────────────────────────────────────────────
     out["PYTHONPATH"] = os.pathsep.join(
         p for p in [str(SCRIPTS), out.get("PYTHONPATH", "")] if p
     )
     out.setdefault("PYTHONIOENCODING", "utf-8")
 
+    # ─────────────────────────────────────────────
+    # Keycloak (FIXED → 8080 ONLY)
+    # ─────────────────────────────────────────────
     if use_keycloak:
-        out["KEYCLOAK_ISSUER"]      = "http://localhost:8180/realms/rag-system"
-        out["KEYCLOAK_REALM_URL"]   = "http://localhost:8180/realms/rag-system"
-        out["KEYCLOAK_PUBLIC_KEY"]  = ""
+        KEYCLOAK_BASE = "http://localhost:8080"
+        REALM = "rag-system"
+        KC_URL = f"{KEYCLOAK_BASE}/realms/{REALM}"
+
+        out["KEYCLOAK_ISSUER"] = KC_URL
+        out["KEYCLOAK_REALM_URL"] = KC_URL
+        out["KEYCLOAK_CLIENT_ID"] = "rag-api"
+        out["KEYCLOAK_CLIENT_SECRET"] = out.get("KEYCLOAK_CLIENT_SECRET", "")
+        out["KEYCLOAK_ALGORITHM"] = "RS256"
+
+        out["KEYCLOAK_PUBLIC_KEY"] = ""
+
     else:
         from dev_auth import DEV_ISSUER, get_public_key_body  # noqa: PLC0415
 
-        out["KEYCLOAK_ISSUER"]     = DEV_ISSUER
-        out["KEYCLOAK_REALM_URL"]  = DEV_ISSUER
+        out["KEYCLOAK_ISSUER"] = DEV_ISSUER
+        out["KEYCLOAK_REALM_URL"] = DEV_ISSUER
         out["KEYCLOAK_PUBLIC_KEY"] = get_public_key_body()
 
-    out.setdefault("INTERNAL_API_KEY",    "rag-internal-dev-key-change-in-prod")
+    # ─────────────────────────────────────────────
+    # Security defaults
+    # ─────────────────────────────────────────────
+    out.setdefault("INTERNAL_API_KEY", "rag-internal-dev-key-change-in-prod")
+
+    # ─────────────────────────────────────────────
+    # Performance tuning
+    # ─────────────────────────────────────────────
     out.setdefault("OPENBLAS_NUM_THREADS", "1")
-    out.setdefault("OMP_NUM_THREADS",      "1")
-    out.setdefault("MKL_NUM_THREADS",      "1")
-    out.setdefault("NUMEXPR_NUM_THREADS",  "1")
-    # Prevent PyTorch from probing/loading CUDA DLLs — saves ~200 MB per process.
+    out.setdefault("OMP_NUM_THREADS", "1")
+    out.setdefault("MKL_NUM_THREADS", "1")
+    out.setdefault("NUMEXPR_NUM_THREADS", "1")
+
+    # Disable CUDA probing
     out.setdefault("CUDA_VISIBLE_DEVICES", "")
-    out.setdefault("PYTORCH_JIT",          "0")
+    out.setdefault("PYTORCH_JIT", "0")
+
     return out
 
 
@@ -204,6 +247,34 @@ def purge_ingestion_queue() -> None:
         print(f"  Warning: could not purge ingestion queue: {exc}")
 
 
+
+def start_ui(root: Path) -> subprocess.Popen:
+    ui_dir = root / "services" / "ui"
+
+    env = os.environ.copy()
+    env["PATH"] += r";C:\Program Files\nodejs"
+    env["PATH"] += r";C:\Users\NOUR SOFT\AppData\Roaming\npm"
+
+    node_modules = ui_dir / "node_modules"
+
+    if not node_modules.exists():
+        print("  -> Installing UI dependencies (npm install)...")
+        subprocess.run("npm install", cwd=ui_dir, shell=True, env=env, check=True)
+
+    print("  -> ui on http://localhost:5173")
+
+    return subprocess.Popen(
+        "npm run dev",
+        cwd=ui_dir,
+        shell=True,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
 def stream_output(proc: subprocess.Popen, prefix: str) -> None:
     if proc.stdout is None:
         return
@@ -223,6 +294,7 @@ def main() -> int:
         help="Also start the Celery ingestion worker (off by default — loads PyTorch/~3 GB DLLs)",
     )
     parser.add_argument("--evaluation", action="store_true", help="Also start evaluation-service on port 8005")
+    parser.add_argument("--ui",         action="store_true", help="Also start the React/Vite UI on http://localhost:5173 (requires Node.js)")
     parser.add_argument("--no-reload",  action="store_true", help="Disable uvicorn --reload")
     parser.add_argument("--skip-infra", action="store_true", help="Skip starting Redis/Keycloak")
     args = parser.parse_args()
@@ -257,7 +329,7 @@ def main() -> int:
     print(f"  Python:     {PYTHON}")
     print(f"  PostgreSQL: localhost:5432")
     print(f"  Qdrant:     embedded at {env['QDRANT_PATH']}")
-    print(f"  Auth:       {'Keycloak http://localhost:8180' if use_keycloak else 'dev JWT fallback'}")
+    print(f"  Auth:       {'Keycloak http://localhost:8080' if use_keycloak else 'dev JWT fallback'}")
     print(f"  Redis:      {'localhost:6379' if use_redis else 'unavailable (sync ingestion + memory cache)'}")
     if not args.worker:
         print(f"  Worker:     disabled (pass --worker to enable Celery ingestion)")
@@ -287,12 +359,25 @@ def main() -> int:
             processes.append((WORKER["name"], worker_proc))
 
         print("\n" + "=" * 60)
+
+        if args.ui:
+            try:
+                ui_proc = start_ui(ROOT)
+                attach_output_logger("ui", ui_proc)
+                processes.append(("ui", ui_proc))
+            except FileNotFoundError:
+                print("  [WARN] Node.js/npm not found — skipping UI. Install Node.js to enable.")
+            except subprocess.CalledProcessError as e:
+                print(f"  [WARN] npm install failed: {e} — skipping UI.")
+
         print("  All processes started. Press Ctrl+C to stop.")
         print("=" * 60)
         if use_keycloak:
-            print("  Keycloak:  http://localhost:8180")
+            print("  Keycloak:  http://localhost:8080")
         for svc in services:
             print(f"  API docs:  http://localhost:{svc['port']}/docs")
+        if args.ui:
+            print("  UI:        http://localhost:5173")
         if args.worker:
             print("\n  Test: python scripts/full_cycle_test.py")
         else:

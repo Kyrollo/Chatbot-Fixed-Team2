@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    @apply bg-surface-1 text-text-primary font-sans antialiased;
+    margin: 0;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-surface-1;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-surface-4 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-text-muted;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-accent hover:bg-accent-dim text-white font-medium px-4 py-2 rounded transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply text-text-secondary hover:text-text-primary hover:bg-surface-3 px-3 py-2 rounded transition-all duration-150;
+  }
+
+  .card {
+    @apply bg-surface-2 border border-surface-4 rounded-lg shadow-card;
+  }
+
+  .input {
+    @apply bg-surface-2 border border-surface-4 rounded text-text-primary placeholder-text-muted 
+           focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 
+           transition-colors duration-150 px-3 py-2 w-full text-sm;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .citation-pill {
+    @apply badge bg-teal/10 text-teal border border-teal/20 cursor-pointer hover:bg-teal/20 transition-colors;
+  }
+
+  /* Streaming text animation */
+  .stream-char {
+    @apply animate-stream;
+  }
+}
+
+/* Message prose styles */
+.message-content {
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.message-content p { margin: 0 0 0.75em; }
+.message-content p:last-child { margin-bottom: 0; }
+.message-content ul, .message-content ol { padding-left: 1.5em; margin: 0.5em 0; }
+.message-content li { margin: 0.25em 0; }
+.message-content code {
+  @apply font-mono bg-surface-3 text-teal px-1.5 py-0.5 rounded text-sm;
+}
+.message-content pre {
+  @apply bg-surface-0 border border-surface-4 rounded-md p-4 overflow-x-auto my-3;
+}
+.message-content pre code {
+  @apply bg-transparent p-0 text-text-primary;
+}
+.message-content h1, .message-content h2, .message-content h3 {
+  @apply font-display font-semibold text-text-primary mt-4 mb-2;
+}
+.message-content a {
+  @apply text-accent hover:text-white underline underline-offset-2;
+}
+.message-content blockquote {
+  @apply border-l-2 border-accent/40 pl-4 text-text-secondary italic;
+}
+.message-content strong { @apply text-text-primary font-semibold; }

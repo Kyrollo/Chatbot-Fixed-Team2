@@ -11,7 +11,7 @@ The gateway is now wired to the real `domain-service` for development.
 
 - `80` Traefik HTTP entrypoint
 - `8080` Traefik dashboard
-- `8180` Keycloak
+- `8080` Keycloak
 - `8001` domain-service
 - `5432` PostgreSQL
 

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Local development JWT helper — replaces Keycloak when running without Docker.
+Local development JWT helper — fallback when Keycloak is not running.
 
-Keys are stored under data/dev/ (gitignored). Services validate tokens using
-KEYCLOAK_PUBLIC_KEY from the environment.
+IMPORTANT:
+- Must NOT conflict with real Keycloak tokens
+- Uses RS256 keys generated locally
+- Compatible with standard JWT validation logic
 """
 
 from __future__ import annotations
@@ -19,10 +21,23 @@ KEY_DIR = ROOT / "data" / "dev"
 PRIVATE_KEY_PATH = KEY_DIR / "jwt_private.pem"
 PUBLIC_KEY_PATH = KEY_DIR / "jwt_public.pem"
 
-DEV_ISSUER = os.getenv("DEV_AUTH_ISSUER", "http://localhost/dev-realm")
-DEV_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "domain-service")
+# ─────────────────────────────────────────────
+# Match Keycloak-like configuration (important)
+# ─────────────────────────────────────────────
+DEV_ISSUER = os.getenv(
+    "DEV_AUTH_ISSUER",
+    "http://localhost:8080/realms/rag-system"
+)
+
+DEV_CLIENT_ID = os.getenv(
+    "KEYCLOAK_CLIENT_ID",
+    "rag-api"
+)
 
 
+# ─────────────────────────────────────────────
+# Key generation
+# ─────────────────────────────────────────────
 def _ensure_keys() -> None:
     if PRIVATE_KEY_PATH.exists() and PUBLIC_KEY_PATH.exists():
         return
@@ -31,7 +46,9 @@ def _ensure_keys() -> None:
     from cryptography.hazmat.primitives.asymmetric import rsa
 
     KEY_DIR.mkdir(parents=True, exist_ok=True)
+
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
     PRIVATE_KEY_PATH.write_bytes(
         key.private_bytes(
             encoding=serialization.Encoding.PEM,
@@ -39,6 +56,7 @@ def _ensure_keys() -> None:
             encryption_algorithm=serialization.NoEncryption(),
         )
     )
+
     PUBLIC_KEY_PATH.write_bytes(
         key.public_key().public_bytes(
             encoding=serialization.Encoding.PEM,
@@ -58,12 +76,15 @@ def get_public_key_pem() -> str:
 
 
 def get_public_key_body() -> str:
-    """Base64 body without PEM headers — matches KEYCLOAK_PUBLIC_KEY format."""
+    """Base64 body without PEM headers (Keycloak-style format)."""
     pem = get_public_key_pem().strip()
     lines = [line for line in pem.splitlines() if not line.startswith("-----")]
     return "".join(lines)
 
 
+# ─────────────────────────────────────────────
+# Token generation (FIXED)
+# ─────────────────────────────────────────────
 def mint_token(
     *,
     user_id: str,
@@ -73,22 +94,41 @@ def mint_token(
     expires_minutes: int = 60,
 ) -> str:
     now = datetime.now(timezone.utc)
+
     payload = {
         "sub": user_id,
         "preferred_username": username,
         "email": email or f"{username}@rag.local",
+
+        # IMPORTANT: match Keycloak format
         "iss": DEV_ISSUER,
-        "aud": DEV_CLIENT_ID,
+        "aud": [DEV_CLIENT_ID],
         "azp": DEV_CLIENT_ID,
-        "iat": now,
-        "exp": now + timedelta(minutes=expires_minutes),
-        "realm_access": {"roles": roles},
-        "resource_access": {DEV_CLIENT_ID: {"roles": roles}},
+
+        # FIX: JWT expects timestamps (not datetime)
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=expires_minutes)).timestamp()),
+
+        "realm_access": {
+            "roles": roles
+        },
+
+        "resource_access": {
+            DEV_CLIENT_ID: {
+                "roles": roles
+            }
+        },
+
+        # optional but harmless (some backends expect it)
+        "typ": "Bearer",
     }
+
     return jwt.encode(payload, get_private_key_pem(), algorithm="RS256")
 
 
-# Seeded users from realm-export.json (passwords only needed if Keycloak is used)
+# ─────────────────────────────────────────────
+# Seed users
+# ─────────────────────────────────────────────
 DEV_USERS = {
     "admin": {
         "user_id": "652ec45e-1b68-478c-9bd3-81cc46fb24a9",
@@ -109,7 +149,11 @@ DEV_USERS = {
 
 
 def token_for(user_key: str) -> str:
+    if user_key not in DEV_USERS:
+        raise ValueError(f"Unknown user: {user_key}")
+
     spec = DEV_USERS[user_key]
+
     return mint_token(
         user_id=spec["user_id"],
         username=spec["username"],
@@ -117,9 +161,11 @@ def token_for(user_key: str) -> str:
     )
 
 
+# ─────────────────────────────────────────────
+# Debug run
+# ─────────────────────────────────────────────
 if __name__ == "__main__":
-    print("Dev auth public key body (set as KEYCLOAK_PUBLIC_KEY):")
+    print("Dev public key (use in KEYCLOAK_PUBLIC_KEY if needed):\n")
     print(get_public_key_body())
-    print()
-    print("Sample admin token:")
+    print("\nSample admin token:\n")
     print(token_for("admin"))

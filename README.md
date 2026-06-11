@@ -2,7 +2,7 @@
 
 Multi-user, multi-domain RAG (Retrieval-Augmented Generation) backend for the Fixed Solutions AI Internship 2026.
 
-The stack includes the full backend path for domain management, ingestion, retrieval, answer generation, and evaluation. The chat UI is intentionally skipped in this sprint; all workflows are exposed through HTTP APIs.
+The stack includes the full backend path for domain management, ingestion, retrieval, answer generation, and evaluation, plus a **React + Vite web chat UI** in `services/ui`.
 
 ---
 
@@ -12,16 +12,17 @@ The stack includes the full backend path for domain management, ingestion, retri
 2. [How It Works](#2-how-it-works)
 3. [System Architecture](#3-system-architecture)
 4. [Services Reference](#4-services-reference)
-5. [Prerequisites](#5-prerequisites)
-6. [Local Setup (Step-by-Step)](#6-local-setup-step-by-step)
-7. [Start The Stack](#7-start-the-stack)
-8. [Verify Services](#8-verify-services)
-9. [End-to-End API Walkthrough](#9-end-to-end-api-walkthrough)
-10. [Authentication & Access Control](#10-authentication--access-control)
-11. [Environment Variables](#11-environment-variables)
-12. [Troubleshooting](#12-troubleshooting)
-13. [What Is Not Included](#13-what-is-not-included)
-14. [Quick Reference Card](#14-quick-reference-card)
+5. [Web Chat UI](#5-web-chat-ui)
+7. [Prerequisites](#6-prerequisites)
+7. [Local Setup (Step-by-Step)](#6-local-setup-step-by-step)
+8. [Start The Stack](#7-start-the-stack)
+9. [Verify Services](#8-verify-services)
+10. [End-to-End API Walkthrough](#9-end-to-end-api-walkthrough)
+11. [Authentication & Access Control](#10-authentication--access-control)
+12. [Environment Variables](#11-environment-variables)
+13. [Troubleshooting](#12-troubleshooting)
+14. [What Is Not Included](#13-what-is-not-included)
+15. [Quick Reference Card](#14-quick-reference-card)
 
 ---
 
@@ -102,7 +103,7 @@ Upload flow
 | Component | Port(s) | Type | Purpose |
 |---|---:|---|---|
 | Traefik (gateway) | 80, 8080 | Reverse proxy | Routes API traffic, enforces auth at the edge |
-| Keycloak | 8180 | Identity provider | Login, JWT token issuance |
+| Keycloak | 8080 | Identity provider | Login, JWT token issuance |
 | PostgreSQL | 5432 | Database | Domains, documents, chunks, query logs |
 | Redis | 6379 | Cache + queue | Celery broker, retrieval cache, answer cache |
 | Qdrant | — | Vector database | Dense embedding search (embedded, no server) |
@@ -158,7 +159,7 @@ Client -> Traefik -> ingestion-service -> Redis queue -> worker-service
 | **What it does** | Manages users, roles, and OAuth2/OpenID Connect tokens. All protected API routes require a valid JWT Bearer token. |
 | **Technology** | Keycloak 26.5.0 |
 | **Realm** | `rag-system` (auto-imported from `services/auth/realm-export.json`) |
-| **Admin console** | http://localhost:8180 (admin / admin) |
+| **Admin console** | http://localhost:8080 (admin / admin) |
 
 **Seeded test users:**
 
@@ -247,7 +248,66 @@ LLM-as-judge scoring stub. Started with `python run_services.py --evaluation`.
 
 ---
 
-## 5. Prerequisites
+## 5. Web Chat UI
+
+The UI lives at `services/ui/` and is a React 18 + Vite 5 single-page app.
+
+### Quick start (dev without Keycloak)
+
+```bash
+cd services/ui
+cp .env.example .env
+# Enable mock auth for local dev — no Keycloak required
+echo "VITE_MOCK_AUTH=true" >> .env
+npm install
+npm run dev
+# Opens at http://localhost:5173
+```
+
+### Starting with the full stack
+
+```bash
+# Pass --ui to run_services.py — it installs npm deps and starts Vite automatically
+python run_services.py --ui
+python run_services.py --ui --worker  # also start the Celery ingestion worker
+```
+
+### Features
+
+| Feature | Details |
+|---|---|
+| Domain selector | Lists your accessible domains; system admins can create new ones |
+| Streaming chat | Real-time streamed answers from the generation service |
+| Citation panel | Click any citation pill to expand the source chunk text |
+| PDF upload | Drag-and-drop with live status polling (pending → processing → done) |
+| Keycloak auth | Full PKCE flow; mock mode (`VITE_MOCK_AUTH=true`) for dev without Keycloak |
+
+### Environment variables (`services/ui/.env`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `VITE_MOCK_AUTH` | `false` | Set `true` to skip Keycloak and use a hardcoded dev user |
+| `VITE_KEYCLOAK_URL` | `http://localhost:8080` | Keycloak base URL |
+| `VITE_KEYCLOAK_REALM` | `rag-system` | Realm name |
+| `VITE_KEYCLOAK_CLIENT` | `rag-ui` | Client ID (must exist in realm) |
+
+> **Note:** For production you need to register `rag-ui` as a public client in Keycloak with the correct redirect URIs. In dev, `VITE_MOCK_AUTH=true` bypasses this entirely.
+
+### Vite proxy
+
+In dev, `vite.config.js` proxies all API paths to their respective services:
+
+```
+/domains   → http://localhost:8001   (domain-service)
+/ingest    → http://localhost:8002   (ingestion-service)
+/generate  → http://localhost:8004   (generation-service)
+```
+
+In production behind Traefik, the same paths route correctly without any UI config change.
+
+---
+
+## 6. Prerequisites
 
 ### Required
 
@@ -265,7 +325,7 @@ LLM-as-judge scoring stub. Started with `python run_services.py --evaluation`.
 | Component | Port | Notes |
 |---|---|---|
 | **Redis** | 6379 | Portable Redis for Windows, downloaded to `tools/redis/` |
-| **Keycloak** | 8180 | Downloaded to `tools/keycloak/` on first run (~150 MB) |
+| **Keycloak** | 8080 | Downloaded to `tools/keycloak/` on first run (~150 MB) |
 | **Qdrant** | — | Embedded at `data/qdrant` automatically (no server needed) |
 
 ### Optional
@@ -277,7 +337,7 @@ LLM-as-judge scoring stub. Started with `python run_services.py --evaluation`.
 
 ---
 
-## 6. Local Setup (Step-by-Step)
+## 7. Local Setup (Step-by-Step)
 
 ### Step 1 — Python Environment
 
@@ -397,13 +457,13 @@ copy "services\auth\realm-export.json" "tools\keycloak\data\import\realm-export.
 
 $env:KC_BOOTSTRAP_ADMIN_USERNAME="admin"
 $env:KC_BOOTSTRAP_ADMIN_PASSWORD="admin"
-.\tools\keycloak\bin\kc.bat start-dev --http-port=8180 --import-realm
+.\tools\keycloak\bin\kc.bat start-dev --http-port=8080 --import-realm
 ```
 
 **Verify (wait 30–60 seconds after starting):**
 
 ```powershell
-curl http://localhost:8180/realms/rag-system
+curl http://localhost:8080/realms/rag-system
 ```
 
 ### Step 7 — Qdrant (Vector Database)
@@ -412,7 +472,7 @@ curl http://localhost:8180/realms/rag-system
 
 ---
 
-## 7. Start The Stack
+## 8. Start The Stack
 
 Once PostgreSQL is running and `.env` is configured:
 
@@ -426,7 +486,7 @@ python run_services.py
 
 ### What `run_services.py` Does (in order)
 
-1. **Keycloak** — starts on http://localhost:8180 (or uses existing instance)
+1. **Keycloak** — starts on http://localhost:8080 (or uses existing instance)
 2. **Redis** — starts on localhost:6379 (or uses existing instance)
 3. **domain-service** — http://localhost:8001
 4. **ingestion-service** — http://localhost:8002
@@ -448,7 +508,7 @@ python run_services.py --skip-infra      # skip Redis/Keycloak if already runnin
 
 ---
 
-## 8. Verify Services
+## 9. Verify Services
 
 ### Health Check
 
@@ -485,7 +545,7 @@ python smoke_test.py
 
 ---
 
-## 9. End-to-End API Walkthrough
+## 10. End-to-End API Walkthrough
 
 This section walks through a complete real workflow: **authenticate → create domain → upload PDF → wait for processing → ask a question**.
 
@@ -495,7 +555,7 @@ This section walks through a complete real workflow: **authenticate → create d
 
 ```powershell
 $response = Invoke-RestMethod -Method Post `
-  -Uri "http://localhost:8180/realms/rag-system/protocol/openid-connect/token" `
+  -Uri "http://localhost:8080/realms/rag-system/protocol/openid-connect/token" `
   -ContentType "application/x-www-form-urlencoded" `
   -Body @{
     client_id  = "admin-cli"
@@ -511,7 +571,7 @@ Write-Host "Token acquired ($($TOKEN.Length) chars)"
 **Bash equivalent:**
 
 ```bash
-TOKEN=$(curl -s -X POST "http://localhost:8180/realms/rag-system/protocol/openid-connect/token" \
+TOKEN=$(curl -s -X POST "http://localhost:8080/realms/rag-system/protocol/openid-connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "client_id=admin-cli" \
   -d "username=admin" \
@@ -701,7 +761,7 @@ curl -X POST "http://localhost/evaluate" \
 
 ---
 
-## 10. Authentication & Access Control
+## 11. Authentication & Access Control
 
 ### Two Layers of Security
 
@@ -742,7 +802,7 @@ When Keycloak is not running, `run_services.py` automatically uses `scripts/dev_
 
 ---
 
-## 11. Environment Variables
+## 12. Environment Variables
 
 All services read from a single root `.env` file. Copy `.env.example` to `.env` and edit.
 
@@ -753,7 +813,7 @@ All services read from a single root `.env` file. Copy `.env.example` to `.env` 
 | `SYNC_DATABASE_URL` | Sync Postgres URL for Celery worker | `postgresql://postgres:postgres@localhost:5432/domain_db` |
 | `REDIS_URL` | Redis connection | `redis://localhost:6379/0` |
 | `QDRANT_PATH` | Embedded Qdrant storage path | `data/qdrant` |
-| `KEYCLOAK_ISSUER` | JWT issuer URL | `http://localhost:8180/realms/rag-system` |
+| `KEYCLOAK_ISSUER` | JWT issuer URL | `http://localhost:8080/realms/rag-system` |
 | `KEYCLOAK_PUBLIC_KEY` | Set automatically by `run_services.py` for dev JWT auth | |
 | `INTERNAL_API_KEY` | Shared secret for internal endpoints | `rag-internal-dev-key-change-in-prod` |
 | `DOMAIN_SERVICE_URL` | Internal domain-service URL | `http://localhost:8001` |
@@ -772,7 +832,7 @@ All services read from a single root `.env` file. Copy `.env.example` to `.env` 
 
 ---
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 ### PostgreSQL — connection refused
 
@@ -795,7 +855,7 @@ Redis 5.x does not support RESP3. The project handles this with `protocol=2`.
 Keycloak takes **30–90 seconds** on first start. Wait and retry:
 
 ```powershell
-curl http://localhost:8180/realms/rag-system
+curl http://localhost:8080/realms/rag-system
 ```
 
 ### Keycloak — download failed (SSL error on Windows)
@@ -823,7 +883,7 @@ First retrieval-service start downloads ~500 MB of embedding models — be patie
 ### Port already in use
 
 ```powershell
-netstat -ano | findstr "LISTENING" | findstr ":8001 :8002 :8003 :8004 :6379 :8180"
+netstat -ano | findstr "LISTENING" | findstr ":8001 :8002 :8003 :8004 :6379 :8080"
 taskkill /PID <pid> /F
 ```
 
@@ -850,7 +910,7 @@ Expected behavior. The retrieval service loads embedding and reranker models on 
 
 ---
 
-## 13. What Is Not Included
+## 14. What Is Not Included
 
 This sprint intentionally does **not** include:
 
@@ -866,7 +926,7 @@ The backend is fully operable through the documented HTTP APIs. A future UI woul
 
 ---
 
-## 14. Quick Reference Card
+## 15. Quick Reference Card
 
 ```text
 Start:      python run_services.py
@@ -875,8 +935,8 @@ Stop:       Ctrl+C
 Env setup:  copy .env.example .env
 E2E test:   python scripts\timed_e2e_test.py
 
-Keycloak:   http://localhost:8180  (admin / admin)
-Token:      POST http://localhost:8180/realms/rag-system/protocol/openid-connect/token
+Keycloak:   http://localhost:8080  (admin / admin)
+Token:      POST http://localhost:8080/realms/rag-system/protocol/openid-connect/token
 
 Typical flow:
   1. Get JWT token

@@ -21,9 +21,9 @@ Authentication and authorization are implemented using Keycloak.
 
 ## Local startup (no Docker)
 
-Keycloak is started automatically by `python run_services.py` on port **8180**.
+Keycloak is started automatically by `python run_services.py` on port **8080**.
 
-Admin console: http://localhost:8180
+Admin console: http://localhost:8080
 
 Bootstrap admin: `admin` / `admin`
 

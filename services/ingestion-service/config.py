@@ -19,8 +19,8 @@ class Settings(BaseSettings):
     max_size_mb: int = 50
 
     # Keycloak JWT validation (same realm as domain-service)
-    KEYCLOAK_ISSUER: str = "http://localhost:8180/realms/rag-system"
-    KEYCLOAK_REALM_URL: str = "http://localhost:8180/realms/rag-system"
+    KEYCLOAK_ISSUER: str = "http://localhost:8080/realms/rag-system"
+    KEYCLOAK_REALM_URL: str = "http://localhost:8080/realms/rag-system"
     KEYCLOAK_CLIENT_ID: str = "domain-service"
     KEYCLOAK_ALGORITHM: str = "RS256"
     KEYCLOAK_PUBLIC_KEY: str = ""

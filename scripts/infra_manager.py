@@ -33,7 +33,7 @@ KEYCLOAK_ZIP_URL = (
     "https://github.com/keycloak/keycloak/releases/download/26.5.0/keycloak-26.5.0.zip"
 )
 
-KEYCLOAK_REALM_URL = "http://localhost:8180/realms/rag-system"
+KEYCLOAK_REALM_URL = "http://localhost:8080/realms/rag-system"
 
 
 def _download_zip(url: str, dest_zip: Path) -> None:
@@ -215,7 +215,7 @@ def start_redis() -> subprocess.Popen:
 def start_keycloak() -> subprocess.Popen:
     home = ensure_keycloak_home()
     if keycloak_ready():
-        print("  Keycloak already running on http://localhost:8180")
+        print("  Keycloak already running on http://localhost:8080")
         return subprocess.Popen(["cmd", "/c", "echo", "keycloak-already-running"], stdout=subprocess.DEVNULL)
 
     import_dir = home / "data" / "import"
@@ -224,10 +224,10 @@ def start_keycloak() -> subprocess.Popen:
 
     if os.name == "nt":
         kc = home / "bin" / "kc.bat"
-        cmd = [str(kc), "start-dev", "--http-port=8180", "--import-realm"]
+        cmd = [str(kc), "start-dev", "--http-port=8080", "--import-realm"]
     else:
         kc = home / "bin" / "kc.sh"
-        cmd = [str(kc), "start-dev", "--http-port=8180", "--import-realm"]
+        cmd = [str(kc), "start-dev", "--http-port=8080", "--import-realm"]
 
     env = os.environ.copy()
     env["KC_BOOTSTRAP_ADMIN_USERNAME"] = "admin"

@@ -18,8 +18,8 @@ class Settings(BaseSettings):
     DOMAIN_SERVICE_URL: str = "http://localhost:8001"
     RETRIEVAL_SERVICE_URL: str = "http://localhost:8003"
 
-    KEYCLOAK_ISSUER: str = "http://localhost:8180/realms/rag-system"
-    KEYCLOAK_REALM_URL: str = "http://localhost:8180/realms/rag-system"
+    KEYCLOAK_ISSUER: str = "http://localhost:8080/realms/rag-system"
+    KEYCLOAK_REALM_URL: str = "http://localhost:8080/realms/rag-system"
     KEYCLOAK_CLIENT_ID: str = "domain-service"
     KEYCLOAK_ALGORITHM: str = "RS256"
     KEYCLOAK_PUBLIC_KEY: str = ""

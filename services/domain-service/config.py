@@ -13,10 +13,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://postgres:123456@localhost:5432/domain_db"
 
     # Keycloak
-    KEYCLOAK_ISSUER: str = "http://localhost:8180/realms/rag-system"
-    KEYCLOAK_REALM_URL: str = "http://localhost:8180/realms/rag-system"
+    KEYCLOAK_ISSUER: str = "http://localhost:8080/realms/rag-system"
+    KEYCLOAK_REALM_URL: str = "http://localhost:8080/realms/rag-system"
     KEYCLOAK_PUBLIC_KEY: str = ""  # PEM body (without header/footer) or full PEM
-    KEYCLOAK_CLIENT_ID: str = "domain-service"
+    KEYCLOAK_CLIENT_ID: str = "rag-api"
     KEYCLOAK_ALGORITHM: str = "RS256"
 
     # JWT claim that marks a system admin (Keycloak realm role)

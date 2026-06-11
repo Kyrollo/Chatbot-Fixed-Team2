@@ -67,7 +67,7 @@ INGESTION_API = "http://localhost:8002"
 RETRIEVAL_API = "http://localhost:8003"
 GENERATION_API= "http://localhost:8004"
 
-KEYCLOAK_BASE   = "http://localhost:8180"
+KEYCLOAK_BASE   = "http://localhost:8080"
 REALM           = "rag-system"
 TOKEN_URL       = f"{KEYCLOAK_BASE}/realms/{REALM}/protocol/openid-connect/token"
 ADMIN_TOKEN_URL = f"{KEYCLOAK_BASE}/realms/master/protocol/openid-connect/token"

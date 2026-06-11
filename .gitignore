@@ -46,4 +46,8 @@ scripts/fixtures/
 *.log
 
 # ─── Gemini agent workspace ──────────────────────────────────────────────────
-.gemini/
+.gemini/-e 
+# UI service
+services/ui/node_modules/
+services/ui/.vite/
+services/ui/dist/

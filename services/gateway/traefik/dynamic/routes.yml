@@ -1,6 +1,15 @@
 http:
   routers:
 
+    # ── UI (catch-all, lowest priority — must come last conceptually) ──────────
+    ui:
+      rule: "PathPrefix(`/`)"
+      service: ui
+      # No auth middleware: the UI itself handles Keycloak redirect
+      priority: 1
+      entryPoints:
+        - web
+
     domain-service:
       rule: "PathPrefix(`/domains`)"
       service: domain-service
@@ -50,6 +59,11 @@ http:
         - web
 
   services:
+
+    ui:
+      loadBalancer:
+        servers:
+          - url: "http://ui:5173"
 
     domain-service:
       loadBalancer:
