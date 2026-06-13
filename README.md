@@ -290,7 +290,7 @@ flowchart TD
     end
 
     subgraph DevAuthMode ["Option B: Dev Auth Mode (Local Fallback)"]
-        Client -->|1. POST /domains/auth/login {user_id}| DS
+        Client -->|"1. POST /domains/auth/login {user_id}"| DS
         DS -->|2. Mint & Return Dev JWT| Client
         Client -->|3. Call Request + Bearer Dev JWT| Service
     end
