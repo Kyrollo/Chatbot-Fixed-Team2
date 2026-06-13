@@ -14,6 +14,9 @@ class QueryRequest(BaseModel):
 class Citation(BaseModel):
     chunk_id: str
     document_id: str
+    filename: str = ""
+    source_type: str = "pdf"
+    chunk_index: int = 0
     page: int | None = None
     score: float
     text: str

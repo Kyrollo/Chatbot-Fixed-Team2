@@ -42,6 +42,10 @@ pymupdf==1.25.2
 pytesseract==0.3.13
 Pillow==11.1.0
 
+# -- Multi-format ingestion (Sprint 2) -----------------------------------------
+python-docx==1.1.2
+pandas==2.2.3
+
 # -- Utilities ------------------------------------------------------------------
 python-dotenv==1.0.1
 aiofiles==24.1.0

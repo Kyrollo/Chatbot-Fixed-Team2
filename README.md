@@ -18,7 +18,7 @@ A complete backend + frontend stack for domain management, document ingestion, h
 8. [Authentication & RBAC](#8-authentication--rbac)
 9. [API Reference](#9-api-reference)
 10. [Prerequisites](#10-prerequisites)
-11. [Quick Start (5 Steps)](#11-quick-start-5-steps)
+11. [Complete From-Scratch Setup & Run Guide](#11-complete-from-scratch-setup--run-guide)
 12. [Environment Variables](#12-environment-variables)
 13. [Troubleshooting](#13-troubleshooting)
 14. [Directory Layout](#14-directory-layout)
@@ -33,7 +33,7 @@ A complete backend + frontend stack for domain management, document ingestion, h
 **Chatbot-Fixed-Team2** is a **multi-user, multi-domain Retrieval-Augmented Generation (RAG) system**. It is a backend + frontend application that allows organizations to:
 
 - Create separate **knowledge domains** (isolated knowledge bases, e.g., "HR Policies", "Tech Support", "Legal Contracts")
-- Upload **PDF documents** into those domains
+- Upload **documents** (PDF, DOCX, CSV, and images) into those domains
 - Ask **natural language questions** and receive **AI-generated answers with citations** grounded in the uploaded documents
 
 ### What Is RAG? (Retrieval-Augmented Generation)
@@ -55,17 +55,17 @@ Here is what happens at each stage, step by step:
 An admin creates a **knowledge domain** — a named workspace that isolates one topic's documents, members, and settings. Each domain has its own RAG configuration (which AI model to use, how to split documents, confidence thresholds). Users are assigned roles (admin, contributor, reader) per domain.
 
 #### Stage 2: Document Ingestion (Upload → Chunk → Index)
-A user uploads a PDF to a domain. Here's what happens internally:
+A user uploads a document (PDF, DOCX, CSV, or image) to a domain. Here's what happens internally:
 
-1. **`ingestion-service`** receives the PDF file and saves it to disk
+1. **`ingestion-service`** receives the file, validates its type (PDF, DOCX, CSV, PNG, JPG, JPEG), and saves it to disk
 2. It creates a `documents` record in PostgreSQL (status = `pending`)
 3. It enqueues an async job into **Redis** (Celery task queue)
 4. **`worker-service`** picks up the job and:
-   - **Extracts text** from the PDF using PyMuPDF (+ Tesseract OCR for scanned pages)
-   - **Splits the text into chunks** — each ~512 characters with 64-character overlap to avoid cutting sentences
+   - **Extracts text** using a format-specific extractor: PyMuPDF for PDFs (+ Tesseract OCR for scanned pages), python-docx for DOCX files, pandas for CSVs, or Tesseract OCR for standalone images
+   - **Splits the text into chunks** using semantic chunking with embedding similarity (topic-boundary detection)
    - **Generates embedding vectors** for each chunk using the `intfloat/multilingual-e5-small` model (384-dimensional vectors). Each chunk is prefixed with `passage:` as required by the E5 model.
-   - **Stores vectors in Qdrant** — one collection per domain, each point contains the chunk text, document ID, page number, and chunk index
-   - **Stores chunks in PostgreSQL** — with a `TSVECTOR` column for BM25 full-text search (keyword matching)
+   - **Stores vectors in Qdrant** — one collection per domain, each point contains the chunk text, document ID, page number, chunk index, filename, and source type
+   - **Stores chunks in PostgreSQL** — with a `TSVECTOR` column for BM25 full-text search and a `source_type` column for format tracking
    - Updates the document status to `done` (or `failed` if there's an error)
 
 #### Stage 3: Question Answering (Query → Retrieve → Generate)
@@ -85,19 +85,20 @@ A user asks a question. Here's the full pipeline:
 6. It sends the prompt to the **LLM** (Groq cloud API or Ollama local) via an OpenAI-compatible API
 7. The LLM generates an answer grounded in the evidence, with citations like `[1]`, `[2]`
 8. The answer is **cached in Redis** and **logged in PostgreSQL** for audit
-9. The response includes: the answer text, citations (which chunk, which document, which page, relevance score), the model used, and whether it was a cache hit
+9. The response includes: the answer text, citations (which chunk, which document filename, which page, source type, relevance score), the model used, and whether it was a cache hit
 
 ### Key Capabilities
 
 | Capability | Description |
 |---|---|
 | Multi-domain isolation | Each domain has its own documents, members, configuration, and vector collection. Complete data separation. |
-| Role-based access (RBAC) | Two-layer security: Keycloak JWT tokens at the gateway + per-domain role checks in each service |
+| Role-based access (RBAC) | Three-layer security: Keycloak JWT tokens at the gateway + per-domain role checks in each service including retrieval |
 | Hybrid retrieval | Combines dense vector search (semantic meaning) + sparse BM25 search (exact keywords) + cross-encoder reranking for highest accuracy |
 | AI answer generation | Groq (cloud, fast, free tier) or Ollama (local, offline). Per-domain LLM routing — some domains can use cloud, others local. |
-| Async document processing | PDFs are processed in background via Celery + Redis. The user gets immediate `202 Accepted` and can poll status. |
+| Multi-format ingestion | Supports PDF, DOCX, CSV, and image (PNG/JPG) uploads. Format-specific extractors with OCR fallback for scanned content. |
+| Async document processing | Documents are processed in background via Celery + Redis. The user gets immediate `202 Accepted` and can poll status. |
 | Intelligent caching | Redis caches both retrieval results and generated answers. Identical repeat queries return instantly. |
-| Citation grounding | Every AI answer includes citations back to the exact chunk, document, and page number |
+| Citation grounding | Every AI answer includes citations with document filename, source type, page/row number, and relevance score |
 | Graceful degradation | If Redis is down → uses in-memory cache. If Groq is down → falls back to Ollama. If Keycloak is down → uses dev auth. |
 | React chat UI | Full-featured web interface for login, domain management, document upload, and interactive Q&A |
 
@@ -106,7 +107,7 @@ A user asks a question. Here's the full pipeline:
 Think of the system as a **smart library with an AI librarian**:
 
 1. **You create a shelf (domain)** — a labeled section of the library for one topic.
-2. **You add books (PDFs)** — the system scans each book, splits it into paragraphs (chunks), and indexes them in two ways: by meaning (vectors) and by keywords (full-text search).
+2. **You add books (PDFs, Word docs, spreadsheets, images)** — the system scans each item, splits it into paragraphs (chunks), and indexes them in two ways: by meaning (vectors) and by keywords (full-text search).
 3. **You ask a question** — the librarian searches both indexes, picks the best paragraphs, and hands them to an AI writer.
 4. **The AI answers** — using only those paragraphs as evidence, and tells you which pages they came from.
 
@@ -166,101 +167,148 @@ flowchart TD
 ### 2.2 Query Flow
 
 ```mermaid
-sequenceDiagram
-    participant C as Client
-    participant T as Traefik
-    participant KC as Keycloak
-    participant GS as generation-service
-    participant DS as domain-service
-    participant RS as retrieval-service
-    participant QD as Qdrant
-    participant PG as PostgreSQL
-    participant LLM as Groq/Ollama
-    participant RD as Redis
+flowchart TD
+    Client["Client (Browser / API)"]
+    Gateway["Traefik Gateway"]
+    KC["Keycloak Auth Provider"]
+    GS["generation-service"]
+    RD["Redis Cache"]
+    DS["domain-service"]
+    RS["retrieval-service"]
+    QD["Qdrant (Vector DB)"]
+    PG["PostgreSQL (BM25 DB)"]
+    LLM["LLM (Groq / Ollama)"]
 
-    C->>T: POST /generate/query (Bearer JWT)
-    T->>KC: Validate JWT
-    KC-->>T: OK
-    T->>GS: Forward request
-
-    GS->>RD: Check answer cache
-    alt Cache hit
-        RD-->>GS: Cached answer
-        GS-->>C: Return answer (cache_hit=true)
-    else Cache miss
-        GS->>DS: GET /domains/{id}/config
-        DS-->>GS: Domain config (llm_route, thresholds)
-
-        GS->>RS: POST /api/v1/retrieve
-        RS->>QD: Dense vector search
-        RS->>PG: BM25 keyword search
-        RS->>RS: RRF Fusion + Reranking
-        RS-->>GS: Top-K chunks with scores
-
-        GS->>GS: Build RAG prompt with citations
-        GS->>LLM: Generate answer
-        LLM-->>GS: AI response
-
-        GS->>RD: Cache answer
-        GS->>PG: Log query
-        GS-->>C: Return answer + citations
-    end
+    Client -->|1. Submit RAG Query| Gateway
+    Gateway -->|2. Validate Token| KC
+    KC -->|3. Token Validated| Gateway
+    Gateway -->|4. Forward Request| GS
+    GS -->|5. Check Cache| RD
+    
+    RD -->|Cache Hit: Return Answer| Client
+    
+    RD -->|Cache Miss| GS
+    GS -->|6. Fetch Config| DS
+    GS -->|7. Request Retrieval| RS
+    
+    RS -->|8a. Dense Search| QD
+    RS -->|8b. Sparse Search| PG
+    QD & PG -->|9. Fusion & Rerank| RS
+    RS -->|10. Return Chunks| GS
+    
+    GS -->|11. Build Prompt & Call| LLM
+    LLM -->|12. Generate Answer| GS
+    GS -->|13. Log Query| PG
+    GS -->|14. Cache Response| RD
+    GS -->|15. Return Final Answer| Client
+    
+    style KC fill:#f9a825,color:#000
+    style RD fill:#dc382d,color:#fff
+    style PG fill:#336791,color:#fff
+    style QD fill:#24b47e,color:#fff
+    style LLM fill:#7c3aed,color:#fff
 ```
+
+*   **What it is**: The Query Flow represents the runtime execution path of a user's question, tracing the lifecycle from initial gateway entry, cache lookup, hybrid document retrieval, LLM prompt assembly, to audit logging and response generation.
+*   **How it works**:
+    1.  The **Client** submits an HTTP `POST` request containing the question and target domain ID to the API Gateway.
+    2.  The **Traefik Gateway** validates the Bearer JWT token against **Keycloak** (or falls back to local RSA validation in dev mode) before forwarding the query.
+    3.  Once verified, the request is routed to the **`generation-service`**.
+    4.  The `generation-service` checks **Redis** for a cached query response. If found, it returns the answer instantly (Cache Hit).
+    5.  On a cache miss, the service fetches the target domain's LLM configuration and confidence thresholds from the **`domain-service`**.
+    6.  It requests document context from the **`retrieval-service`**, which performs a parallel hybrid search: dense vector search in **Qdrant** and sparse keyword search in **PostgreSQL**.
+    7.  The retrieved chunks are fused via Reciprocal Rank Fusion (RRF) and re-scored with a Cross-Encoder reranking model.
+    8.  The `generation-service` constructs a RAG prompt grounding the question in the retrieved passages and sends it to the configured **LLM** (Groq cloud or local Ollama).
+    9.  The LLM-generated answer is cached in Redis, logged in PostgreSQL for audit trailing, and returned to the client with full citation metadata.
+
+---
 
 ### 2.3 Ingestion Pipeline
 
 ```mermaid
-sequenceDiagram
-    participant C as Client
-    participant IS as ingestion-service
-    participant DS as domain-service
-    participant PG as PostgreSQL
-    participant RD as Redis
-    participant WS as worker-service
-    participant QD as Qdrant
+flowchart TD
+    Client["Client (Browser / API)"]
+    IS["ingestion-service"]
+    DS["domain-service"]
+    RD["Redis Queue"]
+    PG["PostgreSQL Database"]
+    WS["worker-service (Celery)"]
+    QD["Qdrant (Vector DB)"]
 
-    C->>IS: POST /ingest (PDF + domain_id)
-    IS->>DS: Check user access (internal)
-    DS-->>IS: Access granted
+    Client -->|1. POST /ingest| IS
+    IS -->|2. Validate Type| IS
+    IS -->|3. Check Access| DS
+    IS -->|4. Create Pending Doc| PG
+    IS -->|5. Enqueue Job| RD
+    IS -->|6. Return 202 Accepted| Client
 
-    IS->>PG: Insert document (status=pending)
-    IS->>RD: Enqueue job
-    IS-->>C: 202 Accepted (document_id)
+    RD -->|7. Dequeue Job| WS
+    WS -->|8. Extract Text| WS
+    WS -->|9. Chunk & Embed| WS
+    WS -->|10. Index Vectors| QD
+    WS -->|11. Store Chunks & FTS| PG
+    WS -->|12. Set Status = done| PG
 
-    RD->>WS: Pick up job
-    WS->>WS: Extract text (PyMuPDF + OCR)
-    WS->>WS: Semantic chunking (E5 model)
-    WS->>WS: Generate embeddings (passage: prefix)
-    WS->>QD: Index vectors (1 collection per domain)
-    WS->>PG: Store chunks + TSVECTOR index
-    WS->>PG: Update status → done
+    style DS fill:#60a5fa,color:#000
+    style RD fill:#dc382d,color:#fff
+    style PG fill:#336791,color:#fff
+    style QD fill:#24b47e,color:#fff
+    style WS fill:#a78bfa,color:#000
 ```
+
+*   **What it is**: The Ingestion Pipeline is an asynchronous document processing workflow that validates uploads, performs format-specific text extraction, semantically segments paragraphs, generates high-dimensional vector embeddings, and builds dual database search indexes.
+*   **How it works**:
+    1.  A contributor uploads a document (PDF, DOCX, CSV, PNG, JPG, or JPEG) to the **`ingestion-service`**.
+    2.  The service performs type validation and checks user permissions by querying the **`domain-service`**.
+    3.  It registers the document in **PostgreSQL** with a `pending` status and publishes a processing task to **Redis**.
+    4.  The client receives an immediate `202 Accepted` response with the `document_id` to poll for completion.
+    5.  The background **`worker-service`** (Celery worker running on a solo pool) picks up the task from Redis.
+    6.  It extracts raw text using format-specific extractors (PyMuPDF with Tesseract OCR fallback for PDFs, python-docx for DOCX, pandas for CSV, or Tesseract OCR for images).
+    7.  The text is split into semantic paragraphs, and each chunk is embedded using the E5 transformer model.
+    8.  The worker writes vectors and provenance metadata into **Qdrant** and stores full-text search indexes in **PostgreSQL**.
+    9.  The document status is updated to `done` (or `failed` with populated error logs if processing fails).
+
+---
 
 ### 2.4 Authentication Flow
 
 ```mermaid
-sequenceDiagram
-    participant C as Client
-    participant T as Traefik
-    participant KC as Keycloak
-    participant S as Service
+flowchart TD
+    Client["Client (Browser / API)"]
+    Gateway["Traefik Gateway"]
+    KC["Keycloak Auth Provider"]
+    DS["domain-service (Dev Auth)"]
+    Service["Microservice (retrieve/ingest/etc)"]
 
-    Note over C,KC: Option A: Keycloak Mode
-    C->>KC: POST /token (username + password)
-    KC-->>C: JWT access_token (5 min TTL)
-    C->>T: Request + Bearer token
-    T->>KC: forwardAuth → /userinfo
-    KC-->>T: User verified
-    T->>S: Forward with JWT
-    S->>S: Decode JWT → extract user_id + roles
-    S->>S: Check domain membership
+    subgraph KeycloakMode ["Option A: Keycloak Mode"]
+        Client -->|1. Authenticate| KC
+        KC -->|2. Return JWT access_token| Client
+        Client -->|3. Call Request + Bearer JWT| Gateway
+        Gateway -->|4. forwardAuth| KC
+        KC -->|5. Verify User| Gateway
+        Gateway -->|6. Forward Request| Service
+    end
 
-    Note over C,S: Option B: Dev Auth Mode (no Keycloak)
-    C->>S: POST /domains/auth/login {user_id}
-    S-->>C: Dev JWT token
-    C->>S: Request + Bearer dev token
-    S->>S: Verify with local RSA key
+    subgraph DevAuthMode ["Option B: Dev Auth Mode (Local Fallback)"]
+        Client -->|1. POST /domains/auth/login {user_id}| DS
+        DS -->|2. Mint & Return Dev JWT| Client
+        Client -->|3. Call Request + Bearer Dev JWT| Service
+    end
+
+    Service -->|Verify signature & extract claims| Service
+    Service -->|Check Domain Access| DS
+
+    style KC fill:#f9a825,color:#000
+    style DS fill:#60a5fa,color:#000
+    style Gateway fill:#7c3aed,color:#fff
+    style Service fill:#a78bfa,color:#000
 ```
+
+*   **What it is**: The Authentication Flow provides a two-tier JWT-based authorization and domain-level Role-Based Access Control (RBAC). It supports both a production-ready Keycloak integration and a lightweight local development authentication fallback.
+*   **How it works**:
+    *   **Option A (Keycloak)**: In production, the client exchanges credentials with **Keycloak** for an access token. Every gateway call is validated on the fly by Traefik gateway using Keycloak's user info before passing the request to microservices.
+    *   **Option B (Dev Auth)**: In local dev mode, the client logs in directly via the **`domain-service`** by passing a user ID. The service verifies the user in PostgreSQL and mints a local JWT token signed with an RSA key.
+    *   **Access Enforcement**: The receiving service decodes the JWT signature and queries the `/internal/check-access` endpoint of the `domain-service` using a shared key to verify the caller has the required domain membership (e.g. `reader` for retrieval, `contributor` for ingestion).
 
 ---
 
@@ -332,6 +380,8 @@ All project documentation consolidated into `README.md` (this file) and `databas
 | Cloud LLM | Groq | — | `llama-3.3-70b-versatile` |
 | Local LLM | Ollama | — | `llama3.2:3b` (offline fallback) |
 | PDF extraction | PyMuPDF + Tesseract | 1.25.2 | Text + OCR for scanned pages |
+| DOCX extraction | python-docx | 1.1.2 | Word document text extraction |
+| CSV extraction | pandas | 2.2.3 | Tabular data text extraction |
 | ML runtime | PyTorch CPU | 2.6.0 | Embedding model inference |
 
 ---
@@ -569,6 +619,7 @@ erDiagram
         int page_num
         int chunk_index
         text content
+        text source_type
         text search_vec
         timestamp created_at
     }
@@ -599,10 +650,10 @@ erDiagram
 | `domain_configs` | Per-domain RAG settings | `llm_route` (api/local), `chunk_size`, `confidence_threshold` |
 | `domain_roles` | Domain-level RBAC memberships | Unique constraint on `(domain_id, user_id)` |
 | `documents` | Uploaded file metadata | `status` (pending → processing → done/failed) |
-| `document_chunks` | Searchable text segments | `search_vec` (TSVECTOR for BM25), GIN index |
+| `document_chunks` | Searchable text segments | `source_type` (pdf/docx/csv/png), `search_vec` (TSVECTOR for BM25), GIN index |
 | `rag_query_logs` | Query audit trail | `query`, `answer`, `llm_route`, `model` |
 
-> For complete DDL and seed data, see [database_setup.md](database_setup.md).
+> For the complete database schema and seed data, see the initialization script [migrations/init_db.sql](file:///d:/Personal/Fixed%20Solutions/Project%20Files/Main/migrations/init_db.sql) and the instructions in [Section 11](#11-complete-from-scratch-setup--run-guide).
 
 ---
 
@@ -721,7 +772,7 @@ All requests through the API gateway require: `Authorization: Bearer <JWT_ACCESS
 
 | Method | Path | Who | Description |
 |---|---|---|---|
-| POST | `/ingest` | `contributor`+ | Upload PDF (multipart: `file` + `domain_id`) |
+| POST | `/ingest` | `contributor`+ | Upload document (multipart: `file` + `domain_id`). Supported: PDF, DOCX, CSV, PNG, JPG, JPEG |
 | GET | `/ingest/{document_id}` | Authenticated | Poll ingestion status |
 | GET | `/health` | Public | Health check |
 
@@ -731,7 +782,7 @@ All requests through the API gateway require: `Authorization: Bearer <JWT_ACCESS
 
 | Method | Path | Who | Description |
 |---|---|---|---|
-| POST | `/api/v1/retrieve` | Internal/Authenticated | Hybrid retrieval (query + domain_id) |
+| POST | `/api/v1/retrieve` | `reader`+ (RBAC enforced) | Hybrid retrieval (query + domain_id). Requires Bearer JWT; verifies domain access. |
 | GET | `/health` | Public | Health check |
 
 ### 9.4 generation-service (port 8004)
@@ -755,7 +806,7 @@ All requests through the API gateway require: `Authorization: Bearer <JWT_ACCESS
 ```json
 {
   "answer": "The refund policy allows returns within 30 days...",
-  "citations": [{"chunk_id": "...", "document_id": "...", "page": 3, "score": 0.87, "text": "..."}],
+  "citations": [{"chunk_id": "...", "document_id": "...", "filename": "policy.pdf", "source_type": "pdf", "chunk_index": 2, "page": 3, "score": 0.87, "text": "..."}],
   "cache_hit": false,
   "llm_route": "api",
   "model": "llama-3.3-70b-versatile"
@@ -811,73 +862,258 @@ All requests through the API gateway require: `Authorization: Bearer <JWT_ACCESS
 
 ---
 
-## 11. Quick Start (5 Steps)
+## 11. Complete From-Scratch Setup & Run Guide
 
-### Step 1 — Python Environment
+Follow this guide to set up the complete system (databases, identity provider, message queues, backend services, and frontend UI) from scratch on a new machine.
 
+---
+
+### 11.1 Python Environment Setup
+
+The backend microservices and worker are written in Python.
+
+1. **Install Python 3.11–3.13** from [python.org](https://www.python.org/downloads/). Ensure you check the box to **"Add Python to PATH"** during installation.
+2. **Open PowerShell** and set up the virtual environment:
+
+🟦 **Run in PowerShell:**
 ```powershell
-# Create venv (first time only)
+# Create virtual environment (first time only)
 python -m venv .venv
 
-# Activate
+# Activate the virtual environment
 .venv\Scripts\activate
 
-# Install all dependencies
+# Install all required Python packages (includes ML models & extractors)
 .venv\Scripts\pip install -r requirements.txt
 ```
+> [!NOTE]
+> Installing dependencies may take 10–20 minutes as it downloads PyTorch CPU and ML inference libraries (approx. 2 GB total).
 
-> First install downloads ~2 GB (PyTorch CPU + embedding models). Allow 10–20 minutes.
+---
 
-### Step 2 — Environment File
+### 11.2 Environment Configuration
 
+All services read from a single, shared configuration file at the project root.
+
+1. **Create the environment file:**
+
+🟦 **Run in PowerShell:**
 ```powershell
 copy .env.example .env
 ```
 
-Edit `.env` and set **at minimum**:
+2. **Edit the `.env` file** and configure the following required parameters:
+   - `POSTGRES_PASSWORD`: Change this to the password you choose for PostgreSQL (see step 11.3).
+   - `GROQ_API_KEY`: Provide a valid Groq API key from [console.groq.com](https://console.groq.com).
 
-```env
-POSTGRES_PASSWORD=1234          # match your local PostgreSQL password
-GROQ_API_KEY=gsk_YOUR_KEY_HERE  # get from https://console.groq.com
-```
+---
 
-### Step 3 — PostgreSQL
+### 11.3 PostgreSQL Installation & Database Generation
 
+PostgreSQL stores domains, user lists, configurations, upload logs, text chunks (with search vectors), and query audit trails.
+
+#### 1. Install PostgreSQL 16
+- Download the installer from [postgresql.org/download/windows](https://www.postgresql.org/download/windows/).
+- Run the installer. Remember the password you set for the `postgres` superuser.
+- Keep the default port **5432**.
+- Verify installation:
+
+🟦 **Run in PowerShell:**
 ```powershell
-# Create the database
+psql -U postgres -V
+```
+If the command is not found, add the PostgreSQL bin folder (typically `C:\Program Files\PostgreSQL\16\bin`) to your user PATH environment variable.
+
+#### 2. Create the Database
+
+🟦 **Run in PowerShell:**
+```powershell
+# Temporarily set password in terminal to bypass prompt
+$env:PGPASSWORD="your_postgres_password"
+
+# Create the main application database
 psql -U postgres -c "CREATE DATABASE domain_db;"
 ```
 
-> For complete schema + seed data setup, see [database_setup.md](database_setup.md).
+#### 3. Initialize Schema & Seed Data
+Generate the entire database structure (including the `source_type` column added in Sprint 2) and populate all tables with initial test data in one command:
 
-### Step 4 — Start the Stack
-
+🟦 **Run in PowerShell:**
 ```powershell
-python run_services.py
+$env:PGPASSWORD="your_postgres_password"
+psql -U postgres -d domain_db -f migrations/init_db.sql
 ```
 
-> Redis and Keycloak are auto-downloaded on first run. Java 17+ must be installed for Keycloak.
+#### 4. Verify Database Setup
+Confirm that all tables were created and populated correctly:
 
-### Step 5 — Verify
-
+🟦 **Run in PowerShell:**
 ```powershell
-curl http://localhost:8001/health
-curl http://localhost:8002/health
-curl http://localhost:8003/health
-curl http://localhost:8004/generate/health
+$env:PGPASSWORD="your_postgres_password"
+psql -U postgres -d domain_db -c "SELECT 'users=' || count(*) FROM users UNION ALL SELECT 'domains=' || count(*) FROM domains UNION ALL SELECT 'configs=' || count(*) FROM domain_configs UNION ALL SELECT 'roles=' || count(*) FROM domain_roles UNION ALL SELECT 'documents=' || count(*) FROM documents UNION ALL SELECT 'chunks=' || count(*) FROM document_chunks UNION ALL SELECT 'logs=' || count(*) FROM rag_query_logs;"
 ```
 
-All should return `{"status":"ok",...}`.
+**Expected Output:**
+```text
+ users=6
+ domains=3
+ configs=3
+ roles=3
+ documents=3
+ chunks=3
+ logs=1
+```
 
-### (Optional) Start React Frontend
+#### 5. Database Migrations (For Upgrades)
+If you already have a database from Sprint 1 and wish to upgrade it without wiping and re-initializing, run the Sprint 2 migration script:
 
+🟦 **Run in PowerShell:**
+```powershell
+$env:PGPASSWORD="your_postgres_password"
+psql -U postgres -d domain_db -f migrations/sprint2_migration.sql
+```
+
+---
+
+### 11.4 Java & Keycloak Identity Setup
+
+Keycloak serves as the central identity provider to enforce Role-Based Access Control (RBAC).
+
+#### 1. Prerequisite: Java Installation
+Keycloak requires Java 17 or higher.
+- Download and install JDK 17+ from [Adoptium](https://adoptium.net/) (Temurin).
+- Verify installation:
+
+🟦 **Run in PowerShell:**
+```powershell
+java -version
+```
+
+#### 2. Starting Keycloak
+
+- **Option A (Automatic):** When you run the launcher script (`python run_services.py`), it automatically downloads Keycloak 26.5.0 to the `tools/keycloak/` folder and imports the realm settings.
+- **Option B (Manual):** Download Keycloak 26.5.0 from github and extract it to `tools/keycloak/`. Copy the realm configuration file and launch:
+
+🟦 **Run in PowerShell:**
+```powershell
+mkdir "tools\keycloak\data\import" -Force
+copy "services\auth\realm-export.json" "tools\keycloak\data\import\realm-export.json"
+
+$env:KC_BOOTSTRAP_ADMIN_USERNAME="admin"
+$env:KC_BOOTSTRAP_ADMIN_PASSWORD="admin"
+.\tools\keycloak\bin\kc.bat start-dev --http-port=8180 --import-realm
+```
+
+#### 3. Seeding Realm Accounts
+Initial users are automatically imported from the exported realm file:
+
+| Username | Password | Realm Role | Description |
+|---|---|---|---|
+| `admin` | `admin` | `system_admin` | Full system administrator |
+| `reader1` | `reader1` | `reader` | Regular viewer account |
+
+To add additional test accounts (e.g., manager, contributor), use the Keycloak Admin CLI:
+
+🟦 **Run in PowerShell:**
+```powershell
+# Login to the CLI
+.\tools\keycloak\bin\kcadm.bat config credentials --server http://localhost:8180 --realm master --user admin --password admin
+
+# Create users in 'rag-system' realm
+.\tools\keycloak\bin\kcadm.bat create users -r rag-system -s username=manager -s enabled=true
+.\tools\keycloak\bin\kcadm.bat create users -r rag-system -s username=user1 -s enabled=true
+.\tools\keycloak\bin\kcadm.bat set-password -r rag-system --username manager --new-password manager
+.\tools\keycloak\bin\kcadm.bat set-password -r rag-system --username user1 --new-password user1
+
+# Assign roles
+.\tools\keycloak\bin\kcadm.bat add-roles -r rag-system --uusername admin --rolename system_admin
+.\tools\keycloak\bin\kcadm.bat add-roles -r rag-system --uusername manager --rolename reader
+```
+
+---
+
+### 11.5 Redis Setup
+
+Redis works as the asynchronous task message broker (Celery) and caching layer.
+
+- **Option A (Automatic):** `run_services.py` automatically downloads a portable version of Redis for Windows to `tools/redis/` on first startup and runs it on port 6379.
+- **Option B (Manual Installation):** If you prefer to install it globally:
+  - Install via Windows Package Manager: `winget install Redis.Redis`
+  - Start the service using `redis-server`.
+
+---
+
+### 11.6 Qdrant Vector Database
+
+No manual setup is required. Qdrant runs in embedded mode inside the Python processes. Vector embeddings and collections are stored as binary files in the `data/qdrant/` folder.
+
+---
+
+### 11.7 React Frontend Setup
+
+The frontend provides an interactive chat interface to ask questions, view citations, manage domains, and upload documents.
+
+🟦 **Run in PowerShell:**
 ```powershell
 cd rag-ui
 npm install
 npm run dev
 ```
+Navigate to **http://localhost:5173** to access the UI. You can sign in using `admin`, `manager`, or `user` user IDs.
 
-Navigate to http://localhost:5173.
+---
+
+### 11.8 Launching the Backend Microservices
+
+Launch all services plus the background Celery ingestion worker simultaneously:
+
+🟦 **Run in PowerShell:**
+```powershell
+.venv\Scripts\activate
+python run_services.py --worker
+```
+
+---
+
+### 11.9 End-to-End System Verification
+
+Once everything is running, verify system functionality:
+
+#### 1. Ingestion File validation (DOCX/CSV/PDF)
+Obtain an access token and test document upload:
+
+🟦 **Run in PowerShell:**
+```powershell
+# Get a JWT dev token
+$token = (Invoke-RestMethod -Uri http://localhost:8001/domains/auth/login -Method POST -ContentType "application/json" -Body '{"user_id":"admin"}').token
+
+# Upload a valid DOCX file (Should return 202 Accepted)
+curl.exe -X POST http://localhost:8002/ingest -H "Authorization: Bearer $token" -F "file=@test.docx" -F "domain_id=11111111-1111-1111-1111-111111111111"
+
+# Upload an invalid file type (Should return 400 Bad Request)
+curl.exe -X POST http://localhost:8002/ingest -H "Authorization: Bearer $token" -F "file=@test.exe" -F "domain_id=11111111-1111-1111-1111-111111111111"
+```
+
+#### 2. Querying & Citations
+Verify that questions return answers with full metadata:
+
+🟦 **Run in PowerShell:**
+```powershell
+curl.exe -X POST http://localhost:8004/generate/query -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d '{"query": "How many leave days do we get?", "domain_id": "11111111-1111-1111-1111-111111111111"}'
+```
+**Expected Response:** A JSON payload containing the answer text and a `citations` array, with `filename`, `source_type`, and `chunk_index` details.
+
+#### 3. Verification of RBAC on Retrieval
+Ensure that users without access roles on a domain are blocked:
+
+🟦 **Run in PowerShell:**
+```powershell
+# Authenticate as viewer (only has access to domain 22222222...)
+$viewer_token = (Invoke-RestMethod -Uri http://localhost:8001/domains/auth/login -Method POST -ContentType "application/json" -Body '{"user_id":"viewer"}').token
+
+# Access domain 11111111... (should fail with 403 Forbidden)
+curl.exe -X POST http://localhost:8003/api/v1/retrieve -H "Authorization: Bearer $viewer_token" -H "Content-Type: application/json" -d '{"query": "vacation", "domain_id": "11111111-1111-1111-1111-111111111111"}'
+```
 
 ---
 
@@ -1024,10 +1260,12 @@ Chatbot-Fixed-Team2/
 ├── run_services.py                   # main launcher (starts everything)
 ├── delete_chunks.py                  # database + vector store reset tool
 ├── README.md                         # this file — complete project guide
-├── database_setup.md                 # from-scratch database & infra setup
+├── migrations/                       # database SQL scripts
+│   ├── init_db.sql                   # creates schema & populates seed data from scratch
+│   └── sprint2_migration.sql         # Sprint 2 migration (source_type column)
 ├── data/                             # auto-created runtime data (gitignored)
 │   ├── qdrant/                       # embedded vector DB
-│   ├── uploads/                      # uploaded PDFs
+│   ├── uploads/                      # uploaded documents (PDF, DOCX, CSV, images)
 │   └── dev/                          # dev JWT keys (fallback auth)
 ├── tools/                            # auto-downloaded infra (gitignored)
 │   ├── redis/
@@ -1050,10 +1288,10 @@ Chatbot-Fixed-Team2/
     ├── gateway/                      # Traefik config + smoke test
     ├── domain-service/               # port 8001
     ├── ingestion-service/            # port 8002
-    ├── retrieval-service/            # port 8003
+    ├── retrieval-service/            # port 8003 (+ RBAC filtering)
     ├── generation-service/           # port 8004
     ├── evaluation-service/           # port 8005 (optional)
-    └── worker-service/               # Celery worker
+    └── worker-service/               # Celery worker (multi-format)
 ```
 
 ---

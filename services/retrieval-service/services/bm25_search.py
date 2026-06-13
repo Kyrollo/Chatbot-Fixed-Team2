@@ -20,14 +20,18 @@ class BM25SearchService:
         pool = await self._get_pool()
         sql = """
             SELECT
-                id,
-                document_id,
-                page_num,
-                text,
-                ts_rank_cd(search_vec, websearch_to_tsquery('simple', $2)) AS score
-            FROM document_chunks
-            WHERE domain_id = $1
-              AND search_vec @@ websearch_to_tsquery('simple', $2)
+                c.id,
+                c.document_id,
+                c.page_num,
+                c.chunk_index,
+                c.text,
+                d.filename,
+                COALESCE(c.source_type, 'pdf') AS source_type,
+                ts_rank_cd(c.search_vec, websearch_to_tsquery('simple', $2)) AS score
+            FROM document_chunks c
+            JOIN documents d ON c.document_id = d.id
+            WHERE c.domain_id = $1
+              AND c.search_vec @@ websearch_to_tsquery('simple', $2)
             ORDER BY score DESC
             LIMIT $3
         """
@@ -38,6 +42,9 @@ class BM25SearchService:
             ChunkResult(
                 chunk_id=row["id"],
                 document_id=row["document_id"],
+                filename=row["filename"],
+                source_type=row["source_type"],
+                chunk_index=row["chunk_index"] or 0,
                 page=row["page_num"],
                 text=row["text"],
                 score=float(row["score"] or 0.0),

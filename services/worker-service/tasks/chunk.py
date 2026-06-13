@@ -36,6 +36,8 @@ def chunk_pages(
     model: SentenceTransformer,
     chunk_size: int = 512,        # kept for API compatibility — not used in semantic mode
     chunk_overlap: int = 0,       # semantic chunking doesn't use sliding overlap
+    source_type: str = "pdf",     # file format: pdf, docx, csv, png, etc.
+    filename: str = "",           # original filename for citation provenance
 ) -> list[dict]:
     """
     Splits pages into semantically coherent chunks.
@@ -47,6 +49,8 @@ def chunk_pages(
         model:        loaded SentenceTransformer — pass from worker startup
         chunk_size:   ignored in semantic mode, kept for interface compatibility
         chunk_overlap: ignored in semantic mode
+        source_type:  file format string (pdf, docx, csv, png, etc.)
+        filename:     original filename for citation provenance
 
     Returns:
         list of chunk dicts ready for embedder.py
@@ -87,6 +91,8 @@ def chunk_pages(
                 "page":        page_num,
                 "chunk_index": chunk_index,
                 "text":        text,
+                "source_type": source_type,
+                "filename":    filename,
             })
             chunk_index += 1
 

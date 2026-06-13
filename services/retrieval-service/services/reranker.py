@@ -77,6 +77,9 @@ class RerankerService:
             ChunkResult(
                 chunk_id=item.chunk_id,
                 document_id=item.document_id,
+                filename=item.filename,
+                source_type=item.source_type,
+                chunk_index=item.chunk_index,
                 page=item.page,
                 text=item.text,
                 score=float(score),

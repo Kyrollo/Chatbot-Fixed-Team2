@@ -52,7 +52,9 @@ async def ingest_document(
     domain_id: str = Form(...),
 ):
     """
-    Accepts a PDF upload for a specific domain.
+    Accepts a document upload for a specific domain.
+
+    Supported file types: PDF, DOCX, CSV, PNG, JPG, JPEG.
 
     Auth flow:
     1. JWT is validated by the get_current_user dependency (mandatory)
@@ -63,8 +65,9 @@ async def ingest_document(
     """
 
     # 1. Validate file type
-    if not file.filename.lower().endswith(FileTypeEnum.PDF):
-        raise HTTPException(400, "Only PDF files are accepted.")
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in {e.value for e in FileTypeEnum}:
+        raise HTTPException(400, f"Unsupported file type: {ext}")
 
     # 2. Read and validate file size
     file_bytes = await file.read()

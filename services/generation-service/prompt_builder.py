@@ -4,8 +4,12 @@ from schemas import Citation
 def build_messages(query: str, citations: list[Citation]) -> list[dict[str, str]]:
     context_parts: list[str] = []
     for idx, citation in enumerate(citations, start=1):
-        location = f"doc={citation.document_id}"
-        if citation.page is not None:
+        # Use filename when available, fall back to document_id
+        doc_label = citation.filename if citation.filename else citation.document_id
+        location = f"file={doc_label}"
+        if citation.source_type == "csv" and citation.page is not None:
+            location += f", rows={citation.page}-{citation.page + 9}"
+        elif citation.page is not None:
             location += f", page={citation.page}"
         context_parts.append(f"[{idx}] {location}\n{citation.text}")
 

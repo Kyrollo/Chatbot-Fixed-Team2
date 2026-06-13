@@ -21,6 +21,9 @@ def fuse_results(*ranked_lists: list[ChunkResult], k: int = 60) -> list[ChunkRes
             ChunkResult(
                 chunk_id=item.chunk_id,
                 document_id=item.document_id,
+                filename=item.filename,
+                source_type=item.source_type,
+                chunk_index=item.chunk_index,
                 page=item.page,
                 text=item.text,
                 score=score,

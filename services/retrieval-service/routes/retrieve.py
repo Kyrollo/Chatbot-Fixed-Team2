@@ -2,6 +2,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, status
 
+from dependencies import CurrentUser, check_domain_access
 from schemas.retrieval import RetrievalRequest, RetrievalResponse
 from services.retrieval_service import RetrievalService
 
@@ -33,7 +34,26 @@ def _get_service() -> RetrievalService:
     response_model=RetrievalResponse,
     summary="Retrieve relevant chunks for a query",
 )
-async def retrieve(request: RetrievalRequest) -> RetrievalResponse:
+async def retrieve(request: RetrievalRequest, user: CurrentUser) -> RetrievalResponse:
+    """
+    Hybrid retrieval endpoint — requires authentication and domain access.
+
+    Sprint 2: Added RBAC filtering. The user must have at least 'reader'
+    role on the target domain, or be a system_admin.
+    """
+    # Domain-level RBAC check — user must have at least reader access
+    allowed = await check_domain_access(
+        user_id=user["user_id"],
+        domain_id=request.domain_id,
+        required_role="reader",
+        is_system_admin=user.get("is_system_admin", False),
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User does not have access to this domain",
+        )
+
     try:
         svc = _get_service()
         return await svc.retrieve(request)

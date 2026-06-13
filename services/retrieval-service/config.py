@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     #cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
     RERANKER_MODEL: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
 
+    # Auth / RBAC (Sprint 2 — RBAC filtering on retrieval)
+    KEYCLOAK_ISSUER: str = "http://localhost:8180/realms/rag-system"
+    KEYCLOAK_REALM_URL: str = "http://localhost:8180/realms/rag-system"
+    KEYCLOAK_CLIENT_ID: str = "domain-service"
+    KEYCLOAK_ALGORITHM: str = "RS256"
+    KEYCLOAK_PUBLIC_KEY: str = ""
+    SYSTEM_ADMIN_ROLE: str = "system_admin"
 
     # Embedding model
     EMBEDDING_MODEL: str = "intfloat/multilingual-e5-small"

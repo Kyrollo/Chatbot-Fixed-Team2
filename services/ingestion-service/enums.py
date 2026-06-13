@@ -2,7 +2,12 @@ from enum import Enum
 
 
 class FileTypeEnum(str, Enum):
-    PDF = ".pdf"
+    PDF  = ".pdf"
+    DOCX = ".docx"
+    CSV  = ".csv"
+    PNG  = ".png"
+    JPG  = ".jpg"
+    JPEG = ".jpeg"
 
 
 class DocumentStatusEnum(str, Enum):

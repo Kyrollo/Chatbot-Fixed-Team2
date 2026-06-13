@@ -1,5 +1,5 @@
 from worker import celery_app
-from tasks.extract import extract_text_from_pdf
+from tasks.extract import extract_text
 from tasks.chunk   import chunk_pages
 from tasks.embed   import embed_chunks, get_model
 from tasks.index   import index_chunks, index_chunks_postgres, update_document_status
@@ -30,6 +30,8 @@ def process_document_sync(document_id: str) -> dict:
     """
     Main processing pipeline — called by Celery or local subprocess mode.
     Pipeline: extract → chunk → embed → index (Qdrant + PostgreSQL)
+
+    Supports PDF, DOCX, CSV, and image (OCR) files.
     """
     print(f"\n{'='*50}")
     print(f"Processing document: {document_id}")
@@ -40,16 +42,22 @@ def process_document_sync(document_id: str) -> dict:
     doc = _get_document(document_id)
     file_path = doc["file_path"]
     domain_id = doc["domain_id"]
+    filename  = doc["filename"]
 
-    print(f"  File:   {file_path}")
-    print(f"  Domain: {domain_id}")
+    # Derive source_type from file extension
+    ext = os.path.splitext(file_path)[1].lower()
+    source_type = ext.lstrip(".")          # "pdf", "docx", "csv", "png"...
 
-    print("\n[1/4] Extracting text from PDF...")
-    pages = extract_text_from_pdf(file_path)
-    print(f"  Extracted {len(pages)} pages")
+    print(f"  File:        {file_path}")
+    print(f"  Domain:      {domain_id}")
+    print(f"  Source type:  {source_type}")
+
+    print(f"\n[1/4] Extracting text from {source_type.upper()} file...")
+    pages = extract_text(file_path)
+    print(f"  Extracted {len(pages)} pages/segments")
 
     if not pages:
-        raise ValueError("No text could be extracted from this PDF.")
+        raise ValueError(f"No text could be extracted from this {source_type.upper()} file.")
 
     print("\n[2/4] Chunking text (semantic)...")
     chunks = chunk_pages(
@@ -57,6 +65,8 @@ def process_document_sync(document_id: str) -> dict:
         document_id=document_id,
         domain_id=domain_id,
         model=get_model(),
+        source_type=source_type,
+        filename=filename,
     )
 
     if not chunks:
@@ -72,14 +82,16 @@ def process_document_sync(document_id: str) -> dict:
     update_document_status(document_id, "done")
 
     print(f"\nDocument {document_id} processed successfully")
-    print(f"  Qdrant:     {qdrant_count} chunks indexed")
-    print(f"  PostgreSQL: {pg_count} chunks indexed (BM25)")
+    print(f"  Source type:  {source_type}")
+    print(f"  Qdrant:       {qdrant_count} chunks indexed")
+    print(f"  PostgreSQL:   {pg_count} chunks indexed (BM25)")
     print(f"{'='*50}\n")
 
     return {
         "document_id": document_id,
         "pages": len(pages),
         "chunks": qdrant_count,
+        "source_type": source_type,
         "status": "done",
     }
 

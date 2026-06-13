@@ -14,16 +14,16 @@ logger = logging.getLogger(__name__)
 
 
 class QdrantSearchService:
-    """Vector search via embedded Qdrant — reuses a single client instance.
+    """Vector search via embedded Qdrant — opens and closes a client per request.
 
-    The old code created a new AsyncQdrantClient on every search() call and
-    closed it afterwards.  For embedded Qdrant this means opening/closing the
-    RocksDB storage per request — very expensive.  Now the client is created
-    once and reused for the service lifetime.
+    To support concurrent writes from worker-service in embedded local mode,
+    we do not hold a persistent lock on the RocksDB storage folder for the
+    service lifetime. The client is created per query and closed immediately
+    after.
     """
 
     def __init__(self) -> None:
-        self._client = async_qdrant_client()
+        pass
 
     async def search(
         self,
@@ -33,15 +33,16 @@ class QdrantSearchService:
     ) -> list[ChunkResult]:
 
         collection_name = domain_id
+        client = async_qdrant_client()
         try:
-            collections = await self._client.get_collections()
+            collections = await client.get_collections()
             exists = any(c.name == collection_name for c in collections.collections)
 
             if not exists:
                 logger.error("Collection %s does not exist", collection_name)
                 return []
 
-            hits = await self._client.search(
+            hits = await client.search(
                 collection_name=collection_name,
                 query_vector=query_vector,
                 limit=top_k,
@@ -50,6 +51,8 @@ class QdrantSearchService:
         except Exception:
             logger.exception("Qdrant search failed for collection %s", collection_name)
             return []
+        finally:
+            await client.close()
 
         results: list[ChunkResult] = []
 
@@ -60,6 +63,9 @@ class QdrantSearchService:
                 ChunkResult(
                     chunk_id=str(payload.get("chunk_id", hit.id)),
                     document_id=payload.get("document_id", ""),
+                    filename=payload.get("filename", ""),
+                    source_type=payload.get("source_type", "pdf"),
+                    chunk_index=payload.get("chunk_index", 0),
                     page=payload.get("page"),
                     text=payload.get("text", ""),
                     score=hit.score,
@@ -70,9 +76,7 @@ class QdrantSearchService:
         return results
 
     async def close(self) -> None:
-        if self._client is not None:
-            await self._client.close()
-            self._client = None
+        pass
 
 
 @lru_cache(maxsize=1)

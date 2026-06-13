@@ -25,6 +25,9 @@ class RetrievalRequest(BaseModel):
 class ChunkResult(BaseModel):
     chunk_id: str
     document_id: str
+    filename: str = ""
+    source_type: str = "pdf"
+    chunk_index: int = 0
     page: Optional[int] = None
     text: str
     score: float
