@@ -107,9 +107,12 @@ def chunk_pages(
 def _split_sentences(text: str) -> list[str]:
     """
     Splits text into sentences on . ! ? and paragraph breaks.
-    Simple regex — no NLP library dependency at this layer.
+    Also handles Arabic sentence-ending punctuation (؟ ۔ !) and
+    Arabic full stop (U+06D4) so Arabic documents are split correctly
+    instead of becoming one giant chunk per page.
     """
-    sentences = re.split(r'(?<=[.!?])\s+|\n{2,}', text)
+    # BUG #4 FIX: added Arabic question mark ؟ (U+061F) and Arabic full stop ۔ (U+06D4)
+    sentences = re.split(r'(?<=[.!?؟۔])\s+|\n{2,}', text)
     return [s.strip() for s in sentences if s.strip()]
 
 

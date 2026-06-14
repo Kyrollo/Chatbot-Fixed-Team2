@@ -6,7 +6,8 @@ Startup order:
   1. Keycloak (auth) on http://localhost:8180
   2. Redis on localhost:6379
   3. FastAPI services on ports 8001-8004 (+ optional 8005)
-  4. Celery worker — only when --worker flag is given
+  4. ocr-service on http://localhost:8006
+  5. Celery worker — only when --worker flag is given
 
 Usage:
     python run_services.py                 # APIs + infra only (no worker)
@@ -88,6 +89,7 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
     out["RETRIEVAL_SERVICE_URL"]  = "http://localhost:8003"
     out["GENERATION_SERVICE_URL"] = "http://localhost:8004"
     out["EVALUATION_SERVICE_URL"] = "http://localhost:8005"
+    out["OCR_SERVICE_URL"]        = "http://localhost:8006"
     out["UPLOAD_DIR"]             = str(ROOT / "data" / "uploads")
     out.setdefault("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     out["PYTHONPATH"] = os.pathsep.join(
@@ -126,6 +128,7 @@ API_SERVICES = [
     {"name": "ingestion-service",  "dir": ROOT / "services" / "ingestion-service",  "port": 8002, "app": "main:app"},
     {"name": "retrieval-service",  "dir": ROOT / "services" / "retrieval-service",  "port": 8003, "app": "main:app"},
     {"name": "generation-service", "dir": ROOT / "services" / "generation-service", "port": 8004, "app": "main:app"},
+    # ocr-service runs embedded inside worker-service (not a standalone process)
 ]
 
 EVALUATION_SERVICE = {
@@ -263,6 +266,7 @@ def main() -> int:
     print(f"  Qdrant:     embedded at {env['QDRANT_PATH']}")
     print(f"  Auth:       {'Keycloak http://localhost:8180' if use_keycloak else 'dev JWT fallback'}")
     print(f"  Redis:      {'localhost:6379' if use_redis else 'unavailable (sync ingestion + memory cache)'}")
+    print(f"  OCR:        embedded in worker-service (PaddleOCR + Surya)")
     if not args.worker:
         print(f"  Worker:     disabled (pass --worker to enable Celery ingestion)")
 

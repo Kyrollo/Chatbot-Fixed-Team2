@@ -1,18 +1,30 @@
 # =============================================================================
 # RAG System — Unified Requirements (Windows 10/11, Python 3.11–3.13, CPU)
-# Install:  python -m venv .venv && .venv\Scripts\pip install -r requirements.txt
+# Single environment — all conflicts resolved
+#
+# Root fix: paddlepaddle 2.6.2 → 3.3.1
+#   v2.6.2 hard-pinned protobuf<=3.20.2 on Windows only.
+#   v3.3.1 dropped that ceiling entirely → protobuf>=3.20.2, no upper bound.
+#   This makes grpcio-tools 1.62.2 (needs protobuf>=4.21.6,<5) compatible.
+#
+# Install:
+#   python -m venv .venv
+#   .venv\Scripts\pip install -r requirements.txt
 # =============================================================================
 
-# -- PyTorch CPU wheels (no NVIDIA GPU required) --------------------------------
 --extra-index-url https://download.pytorch.org/whl/cpu
 
-# -- Web framework (all FastAPI services) ---------------------------------------
+# -- Web framework --------------------------------------------------------------
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic==2.10.4
 pydantic-settings==2.7.1
 python-multipart==0.0.20
-httpx==0.28.1
+httpx>=0.27,<0.28
+
+
+torch==2.6.0
+torchvision==0.21.0
 
 # -- Auth -----------------------------------------------------------------------
 python-jose[cryptography]==3.3.0
@@ -31,18 +43,18 @@ redis==5.2.1
 # -- Vector DB ------------------------------------------------------------------
 qdrant-client==1.12.1
 
-# -- ML / embeddings (CPU — laptop friendly) ------------------------------------
+# -- ML / embeddings (CPU) ------------------------------------------------------
 torch==2.6.0
 sentence-transformers==3.3.1
 sentencepiece>=0.2.1
-numpy==2.2.1
+numpy>=1.24,<2.4
 
-# -- PDF ingestion (worker) -----------------------------------------------------
+# -- PDF ingestion --------------------------------------------------------------
 pymupdf==1.25.2
 pytesseract==0.3.13
-Pillow==11.1.0
+Pillow>=10.2,<11
 
-# -- Multi-format ingestion (Sprint 2) -----------------------------------------
+# -- Multi-format ingestion -----------------------------------------------------
 python-docx==1.1.2
 pandas==2.2.3
 
@@ -51,3 +63,31 @@ python-dotenv==1.0.1
 aiofiles==24.1.0
 requests==2.32.3
 truststore==0.10.0
+
+# =============================================================================
+# OCR Service — same environment, conflict resolved
+# =============================================================================
+
+# -- Paddle stack (UPGRADED: 2.6.2 → 3.3.1 to remove the Windows protobuf ceiling)
+# paddlepaddle 2.6.2 on Windows: protobuf<=3.20.2  ← root cause of the conflict
+# paddlepaddle 3.3.1 on Windows: protobuf>=3.20.2  ← no upper ceiling
+paddlepaddle==3.3.1
+paddleocr>=3.7.0
+
+# -- Surya OCR ------------------------------------------------------------------
+# 0.13.1 is the last version that supports torch>=2.5.1 (compatible with torch==2.6.0)
+# To use the latest surya-ocr 0.20.0, upgrade torch to 2.7.0 in both places
+surya-ocr==0.13.1
+
+# -- Image processing -----------------------------------------------------------
+opencv-python-headless>=4.8.0
+
+# -- gRPC -----------------------------------------------------------------------
+# Final protobuf intersection across all packages:
+#   paddlepaddle 3.3.1 : protobuf>=3.20.2        (no ceiling)
+#   grpcio-tools 1.62.2: protobuf>=4.21.6,<5.0
+#   surya-ocr 0.13.1   : no protobuf dependency
+#   Result             : protobuf>=4.21.6,<5.0   satisfies all three
+grpcio==1.62.2
+grpcio-tools==1.62.2
+protobuf>=4.21.6,<5.0.0
