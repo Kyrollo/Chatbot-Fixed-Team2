@@ -1,5 +1,12 @@
 from worker import celery_app
+
+# Unified extraction backend: PaddleOCR + Surya ensemble (Tesseract removed).
+# Routing: .docx → python-docx | .csv → pandas
+#          .pdf  → PyMuPDF (native text) or OCR pipeline (scanned pages)
+#          .png/.jpg/.jpeg → OCR pipeline
+# See tasks/extract.py for full routing logic.
 from tasks.extract import extract_text
+
 from tasks.chunk   import chunk_pages
 from tasks.embed   import embed_chunks, get_model
 from tasks.index   import index_chunks, index_chunks_postgres, update_document_status
@@ -8,7 +15,7 @@ from sqlalchemy import create_engine, text
 import os
 
 # Sync URL — prefer SYNC_DATABASE_URL, fall back to DATABASE_URL with asyncpg stripped
-_raw_url    = os.getenv("SYNC_DATABASE_URL") or os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/domain_db")
+_raw_url     = os.getenv("SYNC_DATABASE_URL") or os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/domain_db")
 DATABASE_URL = _raw_url.replace("postgresql+asyncpg://", "postgresql://")
 
 _engine = create_engine(DATABASE_URL)
@@ -31,7 +38,11 @@ def process_document_sync(document_id: str) -> dict:
     Main processing pipeline — called by Celery or local subprocess mode.
     Pipeline: extract → chunk → embed → index (Qdrant + PostgreSQL)
 
-    Supports PDF, DOCX, CSV, and image (OCR) files.
+    Routing by file extension (handled inside tasks/extract.py):
+      .pdf              → PyMuPDF (native text) or PaddleOCR+Surya (scanned pages)
+      .docx             → python-docx, segmented by headings / char count
+      .csv              → pandas, batched in groups of 10 rows
+      .png/.jpg/.jpeg   → PaddleOCR + Surya OCR pipeline
     """
     print(f"\n{'='*50}")
     print(f"Processing document: {document_id}")
@@ -46,11 +57,11 @@ def process_document_sync(document_id: str) -> dict:
 
     # Derive source_type from file extension
     ext = os.path.splitext(file_path)[1].lower()
-    source_type = ext.lstrip(".")          # "pdf", "docx", "csv", "png"...
+    source_type = ext.lstrip(".")          # "pdf", "docx", "csv", "png" …
 
     print(f"  File:        {file_path}")
     print(f"  Domain:      {domain_id}")
-    print(f"  Source type:  {source_type}")
+    print(f"  Source type: {source_type}")
 
     print(f"\n[1/4] Extracting text from {source_type.upper()} file...")
     pages = extract_text(file_path)
@@ -77,22 +88,22 @@ def process_document_sync(document_id: str) -> dict:
 
     print("\n[4/4] Indexing into Qdrant + PostgreSQL...")
     qdrant_count = index_chunks(chunks_with_vectors)
-    pg_count = index_chunks_postgres(chunks_with_vectors)
+    pg_count     = index_chunks_postgres(chunks_with_vectors)
 
     update_document_status(document_id, "done")
 
     print(f"\nDocument {document_id} processed successfully")
-    print(f"  Source type:  {source_type}")
-    print(f"  Qdrant:       {qdrant_count} chunks indexed")
-    print(f"  PostgreSQL:   {pg_count} chunks indexed (BM25)")
+    print(f"  Source type: {source_type}")
+    print(f"  Qdrant:      {qdrant_count} chunks indexed")
+    print(f"  PostgreSQL:  {pg_count} chunks indexed (BM25)")
     print(f"{'='*50}\n")
 
     return {
         "document_id": document_id,
-        "pages": len(pages),
-        "chunks": qdrant_count,
+        "pages":       len(pages),
+        "chunks":      qdrant_count,
         "source_type": source_type,
-        "status": "done",
+        "status":      "done",
     }
 
 
