@@ -40,7 +40,7 @@ def chunk_pages(
     filename: str = "",           # original filename for citation provenance
 ) -> list[dict]:
     """
-    Splits pages into semantically coherent chunks.
+    Splits pages into semantically coherent chunks, preserving table blocks whole.
 
     Args:
         pages:        output from extractor.py — list of {page, text}
@@ -62,41 +62,61 @@ def chunk_pages(
         page_num  = page_data["page"]
         page_text = page_data["text"]
 
-        sentences = _split_sentences(page_text)
-        if not sentences:
-            continue
-
-        # Embed all sentences on this page in one batch
-        # multilingual-e5-base requires "query: " or "passage: " prefix
-        # for chunking we treat all text as passages
-        prefixed   = [f"passage: {s}" for s in sentences]
-        embeddings = model.encode(prefixed, normalize_embeddings=True)
-
-        # Find cut points based on cosine similarity between adjacent sentences
-        # Since embeddings are L2-normalized, dot product = cosine similarity
-        cut_points = _find_cut_points(embeddings)
-
-        # Group sentences into chunks using cut points
-        groups = _group_by_cuts(sentences, cut_points)
-
-        for group in groups:
-            text = " ".join(group).strip()
-            if not text:
+        # Parse page text into table blocks and normal text blocks
+        parts = re.split(r'(\[TABLE\].*?\[/TABLE\])', page_text, flags=re.DOTALL)
+        
+        for part in parts:
+            part = part.strip()
+            if not part:
                 continue
+            
+            # If it's a table block, preserve it whole as a single chunk
+            if part.startswith("[TABLE]") and part.endswith("[/TABLE]"):
+                all_chunks.append({
+                    "chunk_id":    f"{document_id}_{chunk_index}",
+                    "document_id": document_id,
+                    "domain_id":   domain_id,
+                    "page":        page_num,
+                    "chunk_index": chunk_index,
+                    "text":        part,
+                    "source_type": source_type,
+                    "filename":    filename,
+                })
+                chunk_index += 1
+            else:
+                # Semantic chunking for normal text block
+                sentences = _split_sentences(part)
+                if not sentences:
+                    continue
 
-            all_chunks.append({
-                "chunk_id":    f"{document_id}_{chunk_index}",
-                "document_id": document_id,
-                "domain_id":   domain_id,
-                "page":        page_num,
-                "chunk_index": chunk_index,
-                "text":        text,
-                "source_type": source_type,
-                "filename":    filename,
-            })
-            chunk_index += 1
+                # Embed all sentences in this block in one batch
+                prefixed   = [f"passage: {s}" for s in sentences]
+                embeddings = model.encode(prefixed, normalize_embeddings=True)
 
-    print(f"  Semantic chunking: {len(pages)} pages -> {len(all_chunks)} chunks")
+                # Find cut points based on cosine similarity between adjacent sentences
+                cut_points = _find_cut_points(embeddings)
+
+                # Group sentences into chunks using cut points
+                groups = _group_by_cuts(sentences, cut_points)
+
+                for group in groups:
+                    text = " ".join(group).strip()
+                    if not text:
+                        continue
+
+                    all_chunks.append({
+                        "chunk_id":    f"{document_id}_{chunk_index}",
+                        "document_id": document_id,
+                        "domain_id":   domain_id,
+                        "page":        page_num,
+                        "chunk_index": chunk_index,
+                        "text":        text,
+                        "source_type": source_type,
+                        "filename":    filename,
+                    })
+                    chunk_index += 1
+
+    print(f"  Table-aware semantic chunking: {len(pages)} pages -> {len(all_chunks)} chunks")
     return all_chunks
 
 

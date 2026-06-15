@@ -4,6 +4,9 @@ from enum import Enum
 class FileTypeEnum(str, Enum):
     PDF  = ".pdf"
     DOCX = ".docx"
+    DOC  = ".doc"
+    XLS  = ".xls"
+    XLSX = ".xlsx"
     CSV  = ".csv"
     PNG  = ".png"
     JPG  = ".jpg"

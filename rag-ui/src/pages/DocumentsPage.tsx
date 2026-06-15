@@ -70,9 +70,11 @@ export default function DocumentsPage() {
   async function handleFiles(files: FileList | null) {
     if (!files || !activeDomainId) return
     setError('')
+    const allowedExts = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.csv'];
     for (const file of Array.from(files)) {
-      if (file.type !== 'application/pdf') {
-        setError(`${file.name}: only PDF files are supported.`)
+      const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+      if (!allowedExts.includes(ext)) {
+        setError(`${file.name}: Unsupported file type. Supported types: PDF, Word, Excel, CSV`)
         continue
       }
       if (file.size > MAX_SIZE) {
@@ -125,12 +127,12 @@ export default function DocumentsPage() {
         )}
       >
         <UploadCloud className="mx-auto mb-3 text-primary" size={32} />
-        <p className="font-medium text-sm">Drag & drop PDF files here, or click to browse</p>
-        <p className="text-xs text-muted-foreground mt-1">PDF only · max 50MB per file</p>
+        <p className="font-medium text-sm">Drag & drop files here, or click to browse</p>
+        <p className="text-xs text-muted-foreground mt-1">PDF, Word, Excel, CSV only · max 50MB per file</p>
         <input
           ref={inputRef}
           type="file"
-          accept="application/pdf"
+          accept=".pdf,.docx,.doc,.xlsx,.xls,.csv"
           multiple
           className="hidden"
           onChange={(e) => handleFiles(e.target.files)}
