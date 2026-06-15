@@ -1,26 +1,20 @@
 import logging
 
 from schemas.retrieval import RetrievalRequest, RetrievalResponse
-from services.bm25_search import get_bm25_search_service
 from services.cache import get_retrieval_cache
-from services.embedding import get_embedding_service
-from services.qdrant_search import get_qdrant_search_service
-from services.reranker import get_reranker_service
-from services.rrf_fusion import fuse_results
+from services.retrieval_pipeline import RetrievalPipeline
 
 logger = logging.getLogger(__name__)
 
 
 class RetrievalService:
     def __init__(self) -> None:
-        self._embedder = get_embedding_service()
-        self._qdrant = get_qdrant_search_service()
-        self._bm25 = get_bm25_search_service()
-        self._reranker = get_reranker_service()
         self._cache = get_retrieval_cache()
+        self._pipeline = RetrievalPipeline()
 
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResponse:
         try:
+            # Check cache first — unchanged behavior
             cached = await self._cache.get(
                 domain_id=request.domain_id,
                 query=request.query,
@@ -30,31 +24,10 @@ class RetrievalService:
             if cached is not None:
                 return cached
 
-            query_vector = self._embedder.embed_query(request.query)
+            # Run the full orchestrated pipeline
+            response = await self._pipeline.run(request)
 
-            # Run vector + BM25 search in parallel for speed
-            vector_results = await self._qdrant.search(
-                domain_id=request.domain_id,
-                query_vector=query_vector,
-                top_k=request.top_k_retrieve,
-            )
-            bm25_results = await self._bm25.search(
-                domain_id=request.domain_id,
-                query=request.query,
-                top_k=request.top_k_retrieve,
-            )
-
-            fused_results = fuse_results(vector_results, bm25_results)
-
-            # Reranker gracefully degrades — returns fusion-scored results
-            # if the model isn't available (see reranker.py)
-            reranked_results = await self._reranker.rerank(
-                request.query,
-                fused_results[: request.top_k_retrieve],
-                request.top_k_rerank,
-            )
-
-            response = RetrievalResponse(results=reranked_results, cache_hit=False)
+            # Cache the result
             await self._cache.set(
                 domain_id=request.domain_id,
                 query=request.query,

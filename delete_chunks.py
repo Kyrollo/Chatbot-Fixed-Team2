@@ -66,27 +66,25 @@ def _check_venv() -> None:
 
 
 def _load_env() -> dict[str, str]:
-    """Load .env from project root. Uses python-dotenv if available, falls back to manual parsing."""
+    """Load .env from project root."""
     env_path = ROOT / ".env"
-    vals: dict[str, str] = {}
+
     if not env_path.exists():
-        warn(f".env file not found at {env_path}")
-        warn("Using default PostgreSQL credentials (postgres:postgres@localhost:5432/domain_db)")
-        return vals
+        raise FileNotFoundError(f".env file not found at {env_path}")
 
     try:
-        from dotenv import dotenv_values  # noqa: PLC0415
+        from dotenv import dotenv_values
         raw = dotenv_values(env_path)
-        vals = {k: v for k, v in raw.items() if v is not None}
+        return {k: v for k, v in raw.items() if v is not None}
     except ImportError:
-        # Fallback: manual .env parser
+        vals = {}
         for line in env_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, _, value = line.partition("=")
             vals[key.strip()] = value.strip()
-    return vals
+        return vals
 
 
 async def _wipe_postgresql(cfg: dict[str, str]) -> int:
@@ -100,9 +98,9 @@ async def _wipe_postgresql(cfg: dict[str, str]) -> int:
         return 0
 
     user = cfg.get("POSTGRES_USER", "postgres")
-    password = cfg.get("POSTGRES_PASSWORD", "postgres")
+    password = cfg.get("POSTGRES_PASSWORD", "55555")
     db = cfg.get("POSTGRES_DB", "domain_db")
-    dsn = f"postgresql://{user}:{password}@localhost:5432/{db}"
+    dsn = f"postgresql://{user}:{55555}@localhost:5432/{db}"
 
     try:
         print("\n  Connecting to PostgreSQL...")

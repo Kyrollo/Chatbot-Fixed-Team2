@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # Redis + Postgres
     REDIS_URL: str = "redis://localhost:6379/0"
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/domain_db"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:55555@localhost:5432/domain_db"
     DOMAIN_SERVICE_URL: str = "http://localhost:8001"
     INTERNAL_API_KEY: str = "rag-internal-dev-key-change-in-prod"
 
@@ -39,5 +39,13 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "intfloat/multilingual-e5-small"
     EMBEDDING_DIMENSION: int = 384
 
+    # LLM Router (for query analysis — reuses same keys as generation-service)
+    GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
+    GROQ_API_KEY: str = "your-groq-api-key"
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
+    OLLAMA_MODEL: str = "llama3.2:3b"
+
 
 settings = Settings()
+

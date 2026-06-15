@@ -15,21 +15,13 @@ logger = logging.getLogger(__name__)
 
 
 class RerankerService:
-    """Cross-encoder reranker — lazy-loads the model on first use.
-
-    The CrossEncoder (and therefore PyTorch) is NOT loaded at import time
-    or __init__ time.  It loads on the first rerank() call, so:
-      - Service startup is instant (no 15-second model load blocking)
-      - PyTorch DLLs (~3 GB) are loaded only when actually needed
-      - If no reranking is ever needed, no memory is consumed
-    """
+    """Cross-encoder reranker — lazy-loads the model on first use."""
 
     def __init__(self) -> None:
-        self._model = None  # loaded lazily
+        self._model = None
         self._load_failed = False
 
     def _ensure_model(self) -> bool:
-        """Load the CrossEncoder model if not already loaded. Returns True on success."""
         if self._model is not None:
             return True
         if self._load_failed:
@@ -40,8 +32,7 @@ class RerankerService:
         t0 = time.perf_counter()
 
         try:
-            from sentence_transformers import CrossEncoder  # noqa: PLC0415
-
+            from sentence_transformers import CrossEncoder
             self._model = CrossEncoder(model_name)
             elapsed = time.perf_counter() - t0
             logger.info("Reranker model ready in %.1fs", elapsed)
@@ -50,12 +41,7 @@ class RerankerService:
             self._load_failed = True
             logger.exception(
                 "Failed to load reranker model '%s'. "
-                "Reranking will be skipped — results returned by fusion score only. "
-                "Ensure 'sentencepiece' is installed and the model cache is complete. "
-                "Run: pip install sentencepiece && python -c "
-                "\"from sentence_transformers import CrossEncoder; "
-                "CrossEncoder('%s')\"",
-                model_name,
+                "Reranking will be skipped — results returned by fusion score only.",
                 model_name,
             )
             return False
@@ -64,14 +50,31 @@ class RerankerService:
         if not candidates:
             return []
 
-        # If model isn't available, return candidates sorted by existing score
         if not self._ensure_model():
             logger.warning("Reranker unavailable — returning candidates by fusion score")
-            sorted_candidates = sorted(candidates, key=lambda c: c.score, reverse=True)
-            return sorted_candidates[:top_k]
+            return sorted(candidates, key=lambda c: c.score, reverse=True)[:top_k]
 
+        logger.info(
+            "Reranker input: %d candidates for query=%r",
+            len(candidates),
+            query[:60],
+        )
+
+        # Log top candidates before reranking
+        for i, c in enumerate(candidates[:5]):
+            logger.info(
+                "  [before] rank=%d chunk=%s page=%s rrf_score=%.5f text_preview=%r",
+                i + 1,
+                c.chunk_id[:8],
+                c.page,
+                c.score,
+                c.text[:80],
+            )
+
+        t0 = time.perf_counter()
         pairs = [(query, item.text) for item in candidates]
         scores = await asyncio.to_thread(self._model.predict, pairs)
+        elapsed = time.perf_counter() - t0
 
         reranked = [
             ChunkResult(
@@ -88,7 +91,26 @@ class RerankerService:
             for item, score in zip(candidates, scores, strict=False)
         ]
         reranked.sort(key=lambda item: item.score, reverse=True)
-        return reranked[:top_k]
+        final = reranked[:top_k]
+
+        logger.info(
+            "Reranker done in %.2fs — %d candidates → top %d results:",
+            elapsed,
+            len(candidates),
+            len(final),
+        )
+        # Log top results after reranking
+        for i, c in enumerate(final):
+            logger.info(
+                "  [after]  rank=%d chunk=%s page=%s rerank_score=%.4f text_preview=%r",
+                i + 1,
+                c.chunk_id[:8],
+                c.page,
+                c.score,
+                c.text[:80],
+            )
+
+        return final
 
 
 @lru_cache(maxsize=1)

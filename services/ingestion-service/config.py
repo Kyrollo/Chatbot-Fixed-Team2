@@ -8,8 +8,8 @@ class Settings(BaseSettings):
     )
 
     # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/domain_db"
-    sync_database_url: str = "postgresql://postgres:postgres@localhost:5432/domain_db"
+    database_url: str = "postgresql+asyncpg://postgres:55555@localhost:5432/domain_db"
+    sync_database_url: str = "postgresql://postgres:55555@localhost:5432/domain_db"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"

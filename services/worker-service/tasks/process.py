@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, text
 import os
 
 # Sync URL — prefer SYNC_DATABASE_URL, fall back to DATABASE_URL with asyncpg stripped
-_raw_url    = os.getenv("SYNC_DATABASE_URL") or os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/domain_db")
+_raw_url = os.getenv("SYNC_DATABASE_URL") or os.getenv("DATABASE_URL", "postgresql://postgres:55555@localhost:5432/domain_db")
 DATABASE_URL = _raw_url.replace("postgresql+asyncpg://", "postgresql://")
 
 _engine = create_engine(DATABASE_URL)

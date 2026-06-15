@@ -55,4 +55,4 @@ rag-ui/node_modules/
 rag-ui/dist/
 
 # ─── Gemini agent workspace ──────────────────────────────────────────────────
-.gemini/
+.gemini/.history/

@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     )
 
     # Database
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:123456@localhost:5432/domain_db"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:55555@localhost:5432/domain_db"
 
     # Keycloak
     KEYCLOAK_ISSUER: str = "http://localhost:8180/realms/rag-system"
