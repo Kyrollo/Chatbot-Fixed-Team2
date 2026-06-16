@@ -69,10 +69,10 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
     out = dict(env)
 
     user     = out.get("POSTGRES_USER", "postgres")
-    password = quote(out.get("POSTGRES_PASSWORD", "55555"), safe="")
+    password = quote(out.get("POSTGRES_PASSWORD", "postgres"), safe="")
     db       = out.get("POSTGRES_DB", "domain_db")
-    out["DATABASE_URL"]      = f"postgresql+asyncpg://{user}:{55555}@localhost:5432/{db}"
-    out["SYNC_DATABASE_URL"] = f"postgresql://{user}:{55555}@localhost:5432/{db}"
+    out["DATABASE_URL"]      = f"postgresql+asyncpg://{user}:{password}@localhost:5432/{db}"
+    out["SYNC_DATABASE_URL"] = f"postgresql://{user}:{password}@localhost:5432/{db}"
 
     if use_redis:
         out["REDIS_URL"] = "redis://localhost:6379/0"

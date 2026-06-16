@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # Redis + Postgres
     REDIS_URL: str = "redis://localhost:6379/0"
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:55555@localhost:5432/domain_db"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/domain_db"
     DOMAIN_SERVICE_URL: str = "http://localhost:8001"
     INTERNAL_API_KEY: str = "rag-internal-dev-key-change-in-prod"
 

@@ -22,7 +22,13 @@ from qdrant_client_factory import sync_qdrant_client  # noqa: E402
 EMBEDDING_DIM = 384
 
 # Sync SQLAlchemy engine — Celery workers are synchronous
-_raw_url = os.getenv("SYNC_DATABASE_URL") or os.getenv("DATABASE_URL", "postgresql://postgres:55555@localhost:5432/domain_db")
+_raw_url = os.getenv("SYNC_DATABASE_URL") or os.getenv("DATABASE_URL")
+if not _raw_url:
+    from urllib.parse import quote
+    user = os.getenv("POSTGRES_USER", "postgres")
+    password = quote(os.getenv("POSTGRES_PASSWORD", "postgres"), safe="")
+    db = os.getenv("POSTGRES_DB", "domain_db")
+    _raw_url = f"postgresql://{user}:{password}@localhost:5432/{db}"
 DATABASE_URL = _raw_url.replace("postgresql+asyncpg://", "postgresql://")
 
 _engine = create_engine(DATABASE_URL)

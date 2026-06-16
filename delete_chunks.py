@@ -97,10 +97,12 @@ async def _wipe_postgresql(cfg: dict[str, str]) -> int:
              else "  Fix: pip install asyncpg")
         return 0
 
+    from urllib.parse import quote
     user = cfg.get("POSTGRES_USER", "postgres")
-    password = cfg.get("POSTGRES_PASSWORD", "55555")
+    password = cfg.get("POSTGRES_PASSWORD", "postgres")
+    password_quoted = quote(password, safe="")
     db = cfg.get("POSTGRES_DB", "domain_db")
-    dsn = f"postgresql://{user}:{55555}@localhost:5432/{db}"
+    dsn = f"postgresql://{user}:{password_quoted}@localhost:5432/{db}"
 
     try:
         print("\n  Connecting to PostgreSQL...")
