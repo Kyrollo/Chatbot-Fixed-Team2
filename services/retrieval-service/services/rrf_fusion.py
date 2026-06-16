@@ -1,9 +1,14 @@
 import logging
 from collections import defaultdict
-import re
+
 from schemas.retrieval import ChunkResult
 
 logger = logging.getLogger(__name__)
+
+_TABLE_KEYWORDS = [
+    "table", "csv", "excel", "sheet", "row", "col", "column",
+    "average", "sum", "total", "report", "statistics", "data",
+]
 
 
 def fuse_results(*ranked_lists: list[ChunkResult], k: int = 60, query: str | None = None) -> list[ChunkResult]:
@@ -20,22 +25,18 @@ def fuse_results(*ranked_lists: list[ChunkResult], k: int = 60, query: str | Non
             [f"{r.chunk_id[:8]}(score={r.score:.4f})" for r in ranked[:3]],
         )
 
-    for ranked in ranked_lists:
-        for rank, item in enumerate(ranked, start=1):
-            rrf_score = 1.0 / (k + rank)
-            scores[item.chunk_id] += rrf_score
     # Check if this is a table-seeking query
     is_table_q = False
     if query:
-        table_keywords = ["table", "csv", "excel", "sheet", "row", "col", "column", "average", "sum", "total", "report", "statistics", "data"]
         q = query.lower()
-        is_table_q = any(kw in q for kw in table_keywords)
+        is_table_q = any(kw in q for kw in _TABLE_KEYWORDS)
 
+    # Single pass: accumulate RRF score per chunk, apply table boost once,
+    # and track the highest-scoring original ChunkResult per chunk_id.
     for ranked in ranked_lists:
         for rank, item in enumerate(ranked, start=1):
             scores[item.chunk_id] += 1.0 / (k + rank)
-            
-            # Apply table boost if query is table-seeking and chunk is a table
+
             if is_table_q:
                 is_table_chunk = "[TABLE]" in item.text or item.source_type in ("csv", "xls", "xlsx")
                 if is_table_chunk:

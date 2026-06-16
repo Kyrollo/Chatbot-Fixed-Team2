@@ -5,9 +5,10 @@ Stages:
   1. Analyze Query       (local, instant)
   2. Route Query         (LLM, 5s timeout, has fallback)
   3. Execute Retrievers  (parallel)
-  4. Fuse Results        (RRF)
-  5. Re-rank Results     (Cross-Encoder)
-  6. Return Final Chunks
+  4. Fuse Results        (RRF, with table-query boosting)
+  5. Table fallback      (if a table-seeking query found too few table chunks)
+  6. Re-rank Results     (Cross-Encoder)
+  7. Return Final Chunks
 """
 import asyncio
 import logging
@@ -22,6 +23,23 @@ from services.rrf_fusion import fuse_results
 from services.vector_retriever import VectorRetriever
 
 logger = logging.getLogger(__name__)
+
+# Keywords that signal the user is asking about tabular data (CSV/Excel/etc).
+# Used to (a) widen candidate retrieval depth and (b) verify table chunks
+# actually made it into the fused results, with a fallback search if not.
+_TABLE_KEYWORDS = [
+    "table", "csv", "excel", "sheet", "row", "col", "column",
+    "average", "sum", "total", "report", "statistics", "data",
+]
+
+
+def _is_table_query(query: str) -> bool:
+    q_lower = query.lower()
+    return any(kw in q_lower for kw in _TABLE_KEYWORDS)
+
+
+def _is_table_chunk(chunk) -> bool:
+    return "[TABLE]" in chunk.text or chunk.source_type in ("csv", "xls", "xlsx")
 
 
 class RetrievalPipeline:
@@ -42,16 +60,24 @@ class RetrievalPipeline:
             logger.info("Routing [%s]: vector=%s bm25=%s graph=%s",
                         routing.decided_by, routing.use_vector, routing.use_bm25, routing.use_graph)
 
+            # Table-query detection: dynamically widen candidate depth so
+            # table chunks (often sparse / clustered) have a better chance
+            # of surviving into the fused top-k.
+            is_table_query = _is_table_query(request.query)
+            top_k_retrieve = request.top_k_retrieve
+            if is_table_query:
+                top_k_retrieve = max(top_k_retrieve, 30)
+
             # Stage 3: Execute retrievers in parallel
             tasks, labels = [], []
             if routing.use_vector:
-                tasks.append(self._vector.search(request.query, request.domain_id, request.top_k_retrieve))
+                tasks.append(self._vector.search(request.query, request.domain_id, top_k_retrieve))
                 labels.append("vector")
             if routing.use_bm25:
-                tasks.append(self._bm25.search(request.query, request.domain_id, request.top_k_retrieve))
+                tasks.append(self._bm25.search(request.query, request.domain_id, top_k_retrieve))
                 labels.append("bm25")
             if routing.use_graph:
-                tasks.append(self._graph.search(request.query, request.domain_id, request.top_k_retrieve))
+                tasks.append(self._graph.search(request.query, request.domain_id, top_k_retrieve))
                 labels.append("graph")
 
             results_per_engine = await asyncio.gather(*tasks, return_exceptions=True)
@@ -63,21 +89,54 @@ class RetrievalPipeline:
                 else:
                     active_result_lists.append(result)
 
-            # Stage 4: Fuse
+            # Stage 4: Fuse (RRF, with table-query boosting applied inside fuse_results)
             if not active_result_lists:
                 logger.error("All retrieval engines failed — returning empty results")
                 return RetrievalResponse(results=[], cache_hit=False)
 
-            fused = fuse_results(*active_result_lists)
+            fused = fuse_results(*active_result_lists, query=request.query)
 
-            # Stage 5: Re-rank
+            # Stage 5: Table fallback — verify table-seeking queries actually
+            # retrieved table-shaped chunks; if not, run a targeted BM25
+            # search for the [TABLE] marker and merge in anything new.
+            if is_table_query:
+                table_chunks = [c for c in fused if _is_table_chunk(c)]
+                if len(table_chunks) < 2 and routing.use_bm25:
+                    logger.info(
+                        "Fewer than 2 table chunks retrieved for table query — "
+                        "executing structured fallback search"
+                    )
+                    fallback_bm25 = await self._bm25.search(
+                        request.query + " [TABLE]",
+                        request.domain_id,
+                        5,
+                    )
+                    existing_ids = {c.chunk_id for c in fused}
+                    new_chunks = [c for c in fallback_bm25 if c.chunk_id not in existing_ids]
+
+                    if new_chunks:
+                        bm25_list = next(
+                            (r for label, r in zip(labels, active_result_lists) if label == "bm25"),
+                            [],
+                        )
+                        vector_list = next(
+                            (r for label, r in zip(labels, active_result_lists) if label == "vector"),
+                            [],
+                        )
+                        fused = fuse_results(
+                            vector_list,
+                            bm25_list + new_chunks,
+                            query=request.query,
+                        )
+
+            # Stage 6: Re-rank
             reranked = await self._reranker.rerank(
                 request.query,
-                fused[: request.top_k_retrieve],
+                fused[:top_k_retrieve],
                 request.top_k_rerank,
             )
 
-            # Stage 6: Return
+            # Stage 7: Return
             return RetrievalResponse(results=reranked, cache_hit=False)
 
         except Exception:
