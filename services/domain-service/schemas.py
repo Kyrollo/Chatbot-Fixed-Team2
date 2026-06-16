@@ -98,3 +98,43 @@ class LoginResponse(BaseModel):
     role: str
     roles: list[str]
 
+
+# ---------- Document Schemas ----------
+class DocumentResponse(BaseModel):
+    id: str
+    domain_id: str
+    user_id: str
+    filename: str
+    status: str
+    error_msg: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    chunk_count: int = 0
+
+
+# ---------- Chunk Schemas ----------
+class ChunkResponse(BaseModel):
+    """Full chunk data for the multi-view inspector."""
+    id: str
+    document_id: str
+    domain_id: str
+    page_num: int | None = None
+    chunk_index: int = 0
+    text: str
+    chunk_type: str = "text"
+    source_type: str = "pdf"
+    filename: str = ""
+    created_at: datetime | None = None
+
+
+# ---------- User Management Schemas ----------
+class UserCreate(BaseModel):
+    id: str = Field(..., min_length=1, max_length=255)
+    name: str = Field(..., min_length=1, max_length=255)
+    role: str = Field(..., min_length=1, max_length=50)
+
+
+class UserResponse(BaseModel):
+    id: str
+    name: str
+    role: str

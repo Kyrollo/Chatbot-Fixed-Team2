@@ -65,6 +65,7 @@ class QdrantSearchService:
                     document_id=payload.get("document_id", ""),
                     filename=payload.get("filename", ""),
                     source_type=payload.get("source_type", "pdf"),
+                    chunk_type=payload.get("chunk_type", "text"),
                     chunk_index=payload.get("chunk_index", 0),
                     page=payload.get("page"),
                     text=payload.get("text", ""),

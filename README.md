@@ -932,6 +932,7 @@ All requests through the API gateway require: `Authorization: Bearer <JWT_ACCESS
 | **Java** | 17+ | [Adoptium Temurin](https://adoptium.net/). Required for Keycloak. |
 | **Groq API key** | Free tier | [Get one](https://console.groq.com). Primary LLM provider. |
 | **Microsoft Visual C++ Redistributable** | Latest x64 | [Download](https://aka.ms/vs/17/release/vc_redist.x64.exe). Required for PaddleOCR/PyTorch native extensions on Windows. |
+| **Ghostscript** | 10.x | [Download](https://www.ghostscript.com/releases/gsdnld.html). Required by Camelot for table extraction. After installation, verify with `gswin64c --version`. |
 | **RAM** | 8 GB min, 16 GB recommended | Embedding, reranking, PaddleOCR, and Surya models load into memory |
 | **Disk** | ~10 GB free | ML model caches (incl. OCR models) + infra downloads |
 
@@ -979,6 +980,14 @@ pip install -U pip setuptools wheel
 # Install all required Python packages (includes ML models & extractors)
 pip install -r requirements.txt
 ```
+3. **Install Ghostscript** (required by Camelot for table extraction):
+   - Download the installer from the [Ghostscript Downloads Page](https://www.ghostscript.com/releases/gsdnld.html).
+   - Run the installer to complete setup.
+   - Verify the installation in your terminal:
+     ```powershell
+     gswin64c --version
+     ```
+   - Ensure the Ghostscript bin directory (typically `C:\Program Files\gs\gs10.XX.X\bin`) is added to your user/system `PATH` environment variable.
 > [!NOTE]
 > Installing dependencies may take 10–20 minutes as it downloads PyTorch CPU, PaddleOCR/PaddlePaddle, Surya, and other ML inference libraries (approx. 2-3 GB total).
 
@@ -1059,12 +1068,12 @@ psql -U postgres -d domain_db -c "SELECT 'users=' || count(*) FROM users UNION A
 ```
 
 #### 5. Database Migrations (For Upgrades)
-If you already have a database from Sprint 1 and wish to upgrade it without wiping and re-initializing, run the Sprint 2 migration script:
+If you are upgrading the database schema to support task tracking and metadata logging without dropping your tables, run the migration python script:
 
 🟦 **Run in PowerShell:**
 ```powershell
-$env:PGPASSWORD="your_postgres_password"
-psql -U postgres -d domain_db -f migrations/sprint2_migration.sql
+.venv\Scripts\activate
+python run_migration.py
 ```
 
 ---

@@ -70,6 +70,20 @@ class RetrievalCache:
         except Exception:
             self._memory.set(key, payload, settings.CACHE_TTL_SECONDS)
 
+    async def incr(self, key: str, amount: int = 1) -> None:
+        if self._client is not None:
+            try:
+                await self._client.incrby(key, amount)
+            except Exception:
+                pass
+
+    async def incrbyfloat(self, key: str, amount: float) -> None:
+        if self._client is not None:
+            try:
+                await self._client.incrbyfloat(key, amount)
+            except Exception:
+                pass
+
     async def close(self) -> None:
         if self._client is not None:
             await self._client.aclose()

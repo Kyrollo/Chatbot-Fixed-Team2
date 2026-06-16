@@ -11,6 +11,7 @@ export default defineConfig({
       // When the Traefik gateway is used later, point all of these at
       // 'http://localhost:80' instead.
       '/domains': 'http://localhost:8001',
+      '/monitoring': 'http://localhost:8001',
       '/ingest': 'http://localhost:8002',
       '/retrieve': 'http://localhost:8003',
       '/generate': 'http://localhost:8004',

@@ -137,6 +137,7 @@ async def generate_query(request: QueryRequest, user: CurrentUser) -> QueryRespo
             temperature=request.temperature,
             max_tokens=request.max_tokens,
         )
+        await _cache.incr(f"rag:metrics:llm:{route_name}")
 
         async def event_stream():
             answer_parts: list[str] = []
@@ -171,6 +172,7 @@ async def generate_query(request: QueryRequest, user: CurrentUser) -> QueryRespo
         temperature=request.temperature,
         max_tokens=request.max_tokens,
     )
+    await _cache.incr(f"rag:metrics:llm:{route_name}")
     result = QueryResponse(
         answer=answer.strip(),
         citations=citations,

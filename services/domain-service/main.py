@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from config import settings
 from database import dispose_engine, init_db
 from router import internal_router, router
+from monitoring_router import router as monitoring_router
 
 
 @asynccontextmanager
@@ -25,6 +26,7 @@ app = FastAPI(
 
 app.include_router(router)
 app.include_router(internal_router)
+app.include_router(monitoring_router)
 
 
 @app.get("/health", tags=["health"])

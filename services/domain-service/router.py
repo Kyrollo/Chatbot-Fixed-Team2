@@ -15,6 +15,10 @@ from schemas import (
     MemberAssign,
     MemberResponse,
     MemberUpdate,
+    DocumentResponse,
+    ChunkResponse,
+    UserCreate,
+    UserResponse,
 )
 
 # ---------- Domain & member router ----------
@@ -153,6 +157,52 @@ async def update_config(
     return await service.update_config(db, domain_id, payload, user)
 
 
+# ---------- Documents in a Domain ----------
+@router.get("/{domain_id}/documents", response_model=list[DocumentResponse])
+async def list_documents(domain_id: uuid.UUID, db: DBSession, user: CurrentUser):
+    """Lists all documents uploaded to this domain with chunk counts."""
+    return await service.list_documents(db, domain_id, user)
+
+
+@router.delete(
+    "/{domain_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_document(
+    domain_id: uuid.UUID, document_id: str, db: DBSession, user: CurrentUser
+):
+    """Deletes a document and all its chunks from Qdrant + PostgreSQL + disk."""
+    await service.delete_document(db, domain_id, document_id, user)
+    return None
+
+
+@router.get("/{domain_id}/documents/{document_id}/chunks", response_model=list[ChunkResponse])
+async def list_document_chunks(
+    domain_id: uuid.UUID, document_id: str, db: DBSession, user: CurrentUser
+):
+    """Lists all chunks for a specific document (for the multi-view inspector)."""
+    return await service.list_document_chunks(db, domain_id, document_id, user)
+
+
+# ---------- Admin: User Management ----------
+@router.get("/admin/users", response_model=list[UserResponse])
+async def list_users(db: DBSession, admin: SystemAdmin):
+    """Lists all users from the users table in PostgreSQL."""
+    return await service.list_users(db)
+
+
+@router.post("/admin/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def create_user(payload: UserCreate, db: DBSession, admin: SystemAdmin):
+    """Creates a new user in the users table."""
+    return await service.create_user(db, payload.id, payload.name, payload.role)
+
+
+@router.delete("/admin/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(user_id: str, db: DBSession, admin: SystemAdmin):
+    """Deletes a user and cascades to domain_roles."""
+    await service.delete_user(db, user_id)
+    return None
+
+
 # ---------- Internal RBAC router ----------
 internal_router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -168,3 +218,4 @@ async def check_access(
         required_role=payload.required_role,
     )
     return AccessCheckResponse(**result)
+

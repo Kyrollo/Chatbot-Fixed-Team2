@@ -27,6 +27,7 @@ documents_table = Table(
     Column("file_path",  String,   nullable=False),
     Column("status",     String,   default="pending"),
     Column("error_msg",  Text,     nullable=True),
+    Column("task_id",    String,   nullable=True),
     Column("created_at", DateTime, default=datetime.utcnow),
     Column("updated_at", DateTime, default=datetime.utcnow),
 )
@@ -92,3 +93,13 @@ async def get_document_status(document_id: str) -> dict | None:
         )
         row = result.fetchone()
     return dict(row._mapping) if row else None
+
+
+async def update_task_id(document_id: str, task_id: str):
+    """Stores the Celery task_id for cancel support."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            update(documents_table)
+            .where(documents_table.c.id == document_id)
+            .values(task_id=task_id, updated_at=datetime.utcnow())
+        )

@@ -9,6 +9,14 @@ http:
       entryPoints:
         - web
 
+    monitoring-service:
+      rule: "PathPrefix(`/monitoring`)"
+      service: domain-service
+      middlewares:
+        - auth-keycloak
+      entryPoints:
+        - web
+
     ingestion-service:
       rule: "PathPrefix(`/ingest`)"
       service: ingestion-service

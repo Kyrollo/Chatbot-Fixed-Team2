@@ -8,6 +8,9 @@ logger = logging.getLogger(__name__)
 _TABLE_KEYWORDS = [
     "table", "csv", "excel", "sheet", "row", "col", "column",
     "average", "sum", "total", "report", "statistics", "data",
+    "withholding", "filing", "earns", "wage", "salary", "rate",
+    "range", "bracket", "amount", "lookup", "intersection",
+    "cross-reference", "cell", "value at",
 ]
 
 
@@ -38,9 +41,14 @@ def fuse_results(*ranked_lists: list[ChunkResult], k: int = 60, query: str | Non
             scores[item.chunk_id] += 1.0 / (k + rank)
 
             if is_table_q:
-                is_table_chunk = "[TABLE]" in item.text or item.source_type in ("csv", "xls", "xlsx")
-                if is_table_chunk:
-                    scores[item.chunk_id] += 0.05  # Boost RRF score directly
+                is_table_nl = "[TABLE_NL]" in item.text or getattr(item, 'chunk_type', '') == 'table_nl'
+                is_table_md = ("[TABLE_MD]" in item.text or "[TABLE]" in item.text or
+                               getattr(item, 'chunk_type', '') == 'table_md')
+                is_table_source = item.source_type in ("csv", "xls", "xlsx")
+                if is_table_nl:
+                    scores[item.chunk_id] += 0.08  # Higher boost for NL descriptions
+                elif is_table_md or is_table_source:
+                    scores[item.chunk_id] += 0.03  # Lower boost for raw markdown
 
             current = best_by_chunk.get(item.chunk_id)
             if current is None or item.score > current.score:

@@ -56,6 +56,11 @@ export const domainApi = {
   updateMember: (id: string, userId: string, data: { role: string }) =>
     api.patch(`/domains/${id}/members/${userId}`, data),
   removeMember: (id: string, userId: string) => api.delete(`/domains/${id}/members/${userId}`),
+  documents: (domainId: string) => api.get<any[]>(`/domains/${domainId}/documents`),
+  deleteDocument: (domainId: string, docId: string) => 
+    api.delete(`/domains/${domainId}/documents/${docId}`),
+  documentChunks: (domainId: string, docId: string) => 
+    api.get<any[]>(`/domains/${domainId}/documents/${docId}/chunks`),
 }
 
 // --- Ingestion Service ---
@@ -67,6 +72,7 @@ export const ingestApi = {
     return api.upload<{ document_id: string; status: string }>('/ingest', form)
   },
   status: (documentId: string) => api.get<any>(`/ingest/${documentId}`),
+  cancel: (documentId: string) => api.post(`/ingest/${documentId}/cancel`),
 }
 
 // --- Generation Service ---
@@ -108,4 +114,17 @@ export const evaluateApi = {
 // --- Health checks (Traefik / individual services) ---
 export const healthApi = {
   check: (path: string) => api.get<any>(`${path}/health`).then(() => true).catch(() => false),
+}
+
+// --- Admin Service (Users registry) ---
+export const adminApi = {
+  listUsers: () => api.get<any[]>('/domains/admin/users'),
+  createUser: (data: { id: string; name: string; role: string }) => 
+    api.post<any>('/domains/admin/users', data),
+  deleteUser: (userId: string) => api.delete<void>(`/domains/admin/users/${userId}`),
+}
+
+// --- Monitoring Service ---
+export const monitoringApi = {
+  metrics: () => api.get<any>('/monitoring/metrics'),
 }

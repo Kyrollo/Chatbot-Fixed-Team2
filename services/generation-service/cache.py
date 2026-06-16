@@ -52,6 +52,13 @@ class GenerationCache:
         except Exception:
             self._memory.set(key, payload, settings.CACHE_TTL_SECONDS)
 
+    async def incr(self, key: str) -> None:
+        if self._client is not None:
+            try:
+                await self._client.incr(key)
+            except Exception:
+                pass
+
     async def close(self) -> None:
         if self._client is not None:
             await self._client.aclose()

@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 
 from celery import Celery
-from storage import save_file, insert_document, get_document_status
+from storage import save_file, insert_document, get_document_status, update_status, update_task_id
 from config import settings
 from enums import FileTypeEnum, DocumentStatusEnum, QueueEnum, TaskEnum
 from dependencies import CurrentUser, check_domain_access
@@ -25,24 +25,25 @@ WORKER_DIR = ROOT / "services" / "worker-service"
 SYNC_INGESTION = os.getenv("SYNC_INGESTION", "").lower() in {"1", "true", "yes"}
 
 
-def _enqueue_processing(document_id: str) -> None:
+def _enqueue_processing(document_id: str) -> str | None:
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONPATH", str(ROOT / "scripts"))
 
     if SYNC_INGESTION:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [sys.executable, "-m", "tasks.run_document", document_id],
             cwd=WORKER_DIR,
             env=env,
         )
-        return
+        return str(proc.pid)
 
-    celery_app.send_task(
+    res = celery_app.send_task(
         TaskEnum.PROCESS_DOCUMENT,
         args=[document_id],
         queue=QueueEnum.INGESTION,
     )
+    return res.id
 
 
 @router.post("/ingest", status_code=202)
@@ -105,7 +106,9 @@ async def ingest_document(
     )
 
     # 5. Enqueue processing job (Celery worker or local subprocess)
-    _enqueue_processing(document_id)
+    task_id = _enqueue_processing(document_id)
+    if task_id:
+        await update_task_id(document_id, task_id)
 
     return {
         "document_id": document_id,
@@ -133,3 +136,44 @@ async def get_status(document_id: str, user: CurrentUser):
         "created_at":  str(doc["created_at"]),
         "updated_at":  str(doc["updated_at"]),
     }
+
+
+@router.post("/ingest/{document_id}/cancel")
+async def cancel_processing(document_id: str, user: CurrentUser):
+    """Cancels an in-progress document processing job."""
+    doc = await get_document_status(document_id)
+    if not doc:
+        raise HTTPException(404, "Document not found.")
+
+    allowed = await check_domain_access(
+        user_id=user["user_id"],
+        domain_id=doc["domain_id"],
+        required_role="contributor",
+        is_system_admin=user["is_system_admin"],
+    )
+    if not allowed:
+        raise HTTPException(
+            403,
+            "You do not have contributor or higher access to this domain.",
+        )
+
+    if doc["status"] not in ("pending", "processing"):
+        raise HTTPException(400, f"Cannot cancel — document is already '{doc['status']}'")
+
+    task_id = doc.get("task_id")
+    if task_id:
+        if SYNC_INGESTION:
+            import signal
+            try:
+                pid = int(task_id)
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                pass
+        else:
+            try:
+                celery_app.control.revoke(task_id, terminate=True, signal='SIGTERM')
+            except Exception:
+                pass
+
+    await update_status(document_id, "cancelled")
+    return {"document_id": document_id, "status": "cancelled"}

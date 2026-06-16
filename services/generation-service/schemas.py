@@ -16,6 +16,7 @@ class Citation(BaseModel):
     document_id: str
     filename: str = ""
     source_type: str = "pdf"
+    chunk_type: str = "text"
     chunk_index: int = 0
     page: int | None = None
     score: float

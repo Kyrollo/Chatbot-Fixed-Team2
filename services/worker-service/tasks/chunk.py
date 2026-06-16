@@ -21,12 +21,25 @@ if TYPE_CHECKING:
 #   4. Where similarity drops below threshold → topic shift → new chunk
 #   5. Respect min/max chunk size guards to avoid 1-sentence or huge chunks
 #
+# Table handling:
+#   [TABLE_NL]...[/TABLE_NL] — Pre-sized NL descriptions → pass through as-is
+#   [TABLE_MD]...[/TABLE_MD] — Raw markdown → split with header replication
+#   [TABLE]...[/TABLE]       — Legacy marker → treated as TABLE_MD
+#
 # The model is passed in — load it ONCE on worker startup, not per document.
 # ------------------------------------------------------------------
 
 SIMILARITY_THRESHOLD = 0.7   # below this → new chunk
 MIN_CHUNK_SENTENCES  = 2     # never cut a chunk smaller than this
 MAX_CHUNK_SENTENCES  = 30    # safety cap — force-cut very long chunks
+
+# Regex to split page text into table blocks (NL, MD, legacy) and normal text
+_TABLE_SPLIT_RE = re.compile(
+    r'(\[TABLE_NL\].*?\[/TABLE_NL\]'
+    r'|\[TABLE_MD\].*?\[/TABLE_MD\]'
+    r'|\[TABLE\].*?\[/TABLE\])',
+    flags=re.DOTALL,
+)
 
 
 def chunk_pages(
@@ -40,7 +53,12 @@ def chunk_pages(
     filename: str = "",           # original filename for citation provenance
 ) -> list[dict]:
     """
-    Splits pages into semantically coherent chunks, preserving table blocks whole.
+    Splits pages into semantically coherent chunks, preserving table blocks.
+
+    Table handling (NO double-chunking):
+    - [TABLE_NL] blocks pass through as-is (already pre-sized by extractor)
+    - [TABLE_MD] blocks are split into ~25-row segments with header replication
+    - [TABLE] (legacy) blocks are treated as TABLE_MD
 
     Args:
         pages:        output from extractor.py — list of {page, text}
@@ -63,15 +81,15 @@ def chunk_pages(
         page_text = page_data["text"]
 
         # Parse page text into table blocks and normal text blocks
-        parts = re.split(r'(\[TABLE\].*?\[/TABLE\])', page_text, flags=re.DOTALL)
+        parts = _TABLE_SPLIT_RE.split(page_text)
         
         for part in parts:
             part = part.strip()
             if not part:
                 continue
             
-            # If it's a table block, preserve it whole as a single chunk
-            if part.startswith("[TABLE]") and part.endswith("[/TABLE]"):
+            # ── [TABLE_NL] — Pre-sized NL chunk: pass through as-is ──
+            if part.startswith("[TABLE_NL]") and part.endswith("[/TABLE_NL]"):
                 all_chunks.append({
                     "chunk_id":    f"{document_id}_{chunk_index}",
                     "document_id": document_id,
@@ -81,10 +99,31 @@ def chunk_pages(
                     "text":        part,
                     "source_type": source_type,
                     "filename":    filename,
+                    "chunk_type":  "table_nl",
                 })
                 chunk_index += 1
+
+            # ── [TABLE_MD] or [TABLE] — Markdown table: split with header replication ──
+            elif (part.startswith("[TABLE_MD]") and part.endswith("[/TABLE_MD]")) or \
+                 (part.startswith("[TABLE]") and part.endswith("[/TABLE]")):
+                
+                md_chunks = _split_markdown_table(part)
+                for md_chunk in md_chunks:
+                    all_chunks.append({
+                        "chunk_id":    f"{document_id}_{chunk_index}",
+                        "document_id": document_id,
+                        "domain_id":   domain_id,
+                        "page":        page_num,
+                        "chunk_index": chunk_index,
+                        "text":        md_chunk,
+                        "source_type": source_type,
+                        "filename":    filename,
+                        "chunk_type":  "table_md",
+                    })
+                    chunk_index += 1
+
             else:
-                # Semantic chunking for normal text block
+                # ── Normal text: semantic chunking ──
                 sentences = _split_sentences(part)
                 if not sentences:
                     continue
@@ -113,11 +152,77 @@ def chunk_pages(
                         "text":        text,
                         "source_type": source_type,
                         "filename":    filename,
+                        "chunk_type":  "text",
                     })
                     chunk_index += 1
 
     print(f"  Table-aware semantic chunking: {len(pages)} pages -> {len(all_chunks)} chunks")
     return all_chunks
+
+
+# ------------------------------------------------------------------
+# Markdown table splitter with header replication
+# ------------------------------------------------------------------
+
+def _split_markdown_table(block: str, max_rows_per_chunk: int = 25) -> list[str]:
+    """
+    Splits a [TABLE_MD] or [TABLE] block into segments of ~25 rows,
+    with headers replicated in every segment.
+
+    This prevents double-chunking: the chunker splits the table here,
+    the semantic chunker in the else branch never sees table content.
+    """
+    # Determine which markers are used
+    if block.startswith("[TABLE_MD]"):
+        start_marker = "[TABLE_MD]"
+        end_marker = "[/TABLE_MD]"
+    else:
+        start_marker = "[TABLE_MD]"  # Normalize legacy [TABLE] to [TABLE_MD]
+        end_marker = "[/TABLE_MD]"
+
+    # Strip markers
+    inner = block
+    for marker in ("[TABLE]", "[/TABLE]", "[TABLE_MD]", "[/TABLE_MD]"):
+        inner = inner.replace(marker, "")
+    inner = inner.strip()
+
+    if not inner:
+        return []
+
+    lines = inner.split("\n")
+    lines = [l for l in lines if l.strip()]
+
+    if not lines:
+        return []
+
+    # Identify header lines (first row + separator)
+    header_lines = []
+    data_lines = []
+    found_separator = False
+
+    for i, line in enumerate(lines):
+        if i == 0:
+            header_lines.append(line)
+        elif not found_separator and re.match(r'^\|[\s\-:|]+\|$', line):
+            header_lines.append(line)
+            found_separator = True
+        else:
+            data_lines.append(line)
+
+    if not data_lines:
+        # Table with only headers — return as single chunk
+        return [f"{start_marker}\n{inner}\n{end_marker}"]
+
+    # Split data rows into segments with headers replicated
+    chunks = []
+    header_text = "\n".join(header_lines)
+
+    for i in range(0, len(data_lines), max_rows_per_chunk):
+        segment_lines = data_lines[i: i + max_rows_per_chunk]
+        segment_text = header_text + "\n" + "\n".join(segment_lines)
+        chunks.append(f"{start_marker}\n{segment_text}\n{end_marker}")
+
+    return chunks
 
 
 # ------------------------------------------------------------------

@@ -61,6 +61,8 @@ def _ensure_chunk_table():
                 chunk_index  INTEGER,
                 text         TEXT NOT NULL,
                 source_type  TEXT DEFAULT 'pdf',
+                chunk_type   TEXT DEFAULT 'text',
+                filename     TEXT DEFAULT '',
                 search_vec   TSVECTOR,
                 created_at   TIMESTAMPTZ DEFAULT now()
             )
@@ -127,6 +129,7 @@ def index_chunks(chunks: list[dict]) -> int:
                 "chunk_index": chunk["chunk_index"],
                 "text":        chunk["text"],
                 "source_type": chunk.get("source_type", "pdf"),
+                "chunk_type":  chunk.get("chunk_type", "text"),
                 "filename":    chunk.get("filename", ""),
             },
         )
@@ -174,16 +177,18 @@ def index_chunks_postgres(chunks: list[dict]) -> int:
             conn.execute(
                 text("""
                     INSERT INTO document_chunks
-                        (id, document_id, domain_id, page_num, chunk_index, text, source_type, search_vec)
+                        (id, document_id, domain_id, page_num, chunk_index, text, source_type, chunk_type, filename, search_vec)
                     VALUES
-                        (:id, :document_id, :domain_id, :page_num, :chunk_index, :text, :source_type,
+                        (:id, :document_id, :domain_id, :page_num, :chunk_index, :text, :source_type, :chunk_type, :filename,
                          to_tsvector('simple', :text))
                     ON CONFLICT (id) DO UPDATE SET
                         text        = EXCLUDED.text,
                         search_vec  = to_tsvector('simple', EXCLUDED.text),
                         page_num    = EXCLUDED.page_num,
                         chunk_index = EXCLUDED.chunk_index,
-                        source_type = EXCLUDED.source_type
+                        source_type = EXCLUDED.source_type,
+                        chunk_type  = EXCLUDED.chunk_type,
+                        filename    = EXCLUDED.filename
                 """),
                 {
                     "id":          chunk["chunk_id"],
@@ -193,6 +198,8 @@ def index_chunks_postgres(chunks: list[dict]) -> int:
                     "chunk_index": chunk.get("chunk_index", 0),
                     "text":        chunk["text"],
                     "source_type": chunk.get("source_type", "pdf"),
+                    "chunk_type":  chunk.get("chunk_type", "text"),
+                    "filename":    chunk.get("filename", ""),
                 },
             )
         conn.commit()

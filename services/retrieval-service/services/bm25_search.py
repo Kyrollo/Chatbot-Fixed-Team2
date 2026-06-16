@@ -27,6 +27,7 @@ class BM25SearchService:
                 c.text,
                 d.filename,
                 COALESCE(c.source_type, 'pdf') AS source_type,
+                COALESCE(c.chunk_type, 'text') AS chunk_type,
                 ts_rank_cd(c.search_vec, websearch_to_tsquery('simple', $2)) AS score
             FROM document_chunks c
             JOIN documents d ON c.document_id = d.id
@@ -44,6 +45,7 @@ class BM25SearchService:
                 document_id=row["document_id"],
                 filename=row["filename"],
                 source_type=row["source_type"],
+                chunk_type=row["chunk_type"],
                 chunk_index=row["chunk_index"] or 0,
                 page=row["page_num"],
                 text=row["text"],

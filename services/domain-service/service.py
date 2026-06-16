@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from config import settings
-from models import Domain, DomainConfig, DomainRole, DomainStatus, RoleEnum
+from models import Domain, DomainConfig, DomainRole, DomainStatus, RoleEnum, User
 from schemas import (
     ConfigUpdate,
     DomainCreate,
@@ -333,3 +333,188 @@ async def check_access(
         "role": role,
         "reason": None if allowed else "insufficient_role",
     }
+
+
+# ============================================================
+# Document Management
+# ============================================================
+async def list_documents(
+    db: AsyncSession, domain_id: uuid.UUID, user: dict
+) -> list[dict]:
+    """Lists all documents uploaded to this domain with chunk counts."""
+    await _get_domain_or_404(db, domain_id)
+    await _ensure_min_role(db, user, domain_id, RoleEnum.reader)
+
+    from sqlalchemy import func as sa_func, text as sa_text
+    result = await db.execute(
+        sa_text("""
+            SELECT d.id, d.domain_id, d.user_id, d.filename, d.status,
+                   d.error_msg, d.created_at, d.updated_at,
+                   COALESCE(chunk_counts.cnt, 0) AS chunk_count
+            FROM documents d
+            LEFT JOIN (
+                SELECT document_id, COUNT(*) AS cnt
+                FROM document_chunks
+                GROUP BY document_id
+            ) chunk_counts ON d.id = chunk_counts.document_id
+            WHERE d.domain_id = :domain_id
+            ORDER BY d.created_at DESC
+        """),
+        {"domain_id": str(domain_id)},
+    )
+    rows = result.fetchall()
+    return [dict(row._mapping) for row in rows]
+
+
+async def delete_document(
+    db: AsyncSession, domain_id: uuid.UUID, document_id: str, user: dict
+) -> None:
+    """Deletes a document and all its chunks from PostgreSQL, Qdrant, and disk."""
+    await _get_domain_or_404(db, domain_id)
+    await _ensure_min_role(db, user, domain_id, RoleEnum.contributor)
+
+    from sqlalchemy import text as sa_text
+    import os
+
+    # 1. Get document info (for file_path)
+    result = await db.execute(
+        sa_text("SELECT * FROM documents WHERE id = :id AND domain_id = :domain_id"),
+        {"id": document_id, "domain_id": str(domain_id)},
+    )
+    doc_row = result.fetchone()
+    if not doc_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
+        )
+    doc = dict(doc_row._mapping)
+
+    # 2. Delete chunks from PostgreSQL
+    await db.execute(
+        sa_text("DELETE FROM document_chunks WHERE document_id = :doc_id"),
+        {"doc_id": document_id},
+    )
+
+    # 3. Delete document record
+    await db.execute(
+        sa_text("DELETE FROM documents WHERE id = :id"),
+        {"id": document_id},
+    )
+
+    # 4. Delete vectors from Qdrant (best-effort)
+    try:
+        import sys
+        from pathlib import Path
+        ROOT = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from qdrant_client_factory import sync_qdrant_client
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+        client = sync_qdrant_client()
+        try:
+            client.delete(
+                collection_name=str(domain_id),
+                points_selector=Filter(
+                    must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))]
+                ),
+            )
+        finally:
+            client.close()
+    except Exception as e:
+        # Log but don't fail — PostgreSQL is the source of truth
+        import logging
+        logging.getLogger(__name__).warning("Qdrant deletion failed: %s", e)
+
+    # 5. Delete file from disk (best-effort)
+    file_path = doc.get("file_path", "")
+    if file_path and os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            # Remove empty parent directory
+            parent = os.path.dirname(file_path)
+            if os.path.isdir(parent) and not os.listdir(parent):
+                os.rmdir(parent)
+        except Exception:
+            pass
+
+    await db.flush()
+
+
+async def list_document_chunks(
+    db: AsyncSession, domain_id: uuid.UUID, document_id: str, user: dict
+) -> list[dict]:
+    """Lists all chunks for a specific document (for the multi-view inspector)."""
+    await _get_domain_or_404(db, domain_id)
+    await _ensure_min_role(db, user, domain_id, RoleEnum.reader)
+
+    from sqlalchemy import text as sa_text
+    result = await db.execute(
+        sa_text("""
+            SELECT id, document_id, domain_id, page_num, chunk_index,
+                   text, COALESCE(source_type, 'pdf') AS source_type,
+                   COALESCE(chunk_type, 'text') AS chunk_type,
+                   COALESCE(filename, '') AS filename,
+                   created_at
+            FROM document_chunks
+            WHERE document_id = :doc_id AND domain_id = :domain_id
+            ORDER BY chunk_index ASC
+        """),
+        {"doc_id": document_id, "domain_id": str(domain_id)},
+    )
+    rows = result.fetchall()
+    return [dict(row._mapping) for row in rows]
+
+
+# ============================================================
+# User Management (linked to PostgreSQL users table)
+# ============================================================
+async def list_users(db: AsyncSession) -> list[User]:
+    """Lists all users from the users table."""
+    result = await db.execute(select(User))
+    return list(result.scalars().all())
+
+
+async def create_user(
+    db: AsyncSession, user_id: str, name: str, role: str
+) -> User:
+    """Creates a new user in the users table."""
+    # Check if user already exists
+    existing = await db.execute(select(User).where(User.id == user_id))
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"User '{user_id}' already exists",
+        )
+
+    valid_roles = {"system_admin", "domain_admin", "contributor", "reader"}
+    if role not in valid_roles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid role '{role}'. Must be one of: {', '.join(valid_roles)}",
+        )
+
+    user = User(id=user_id, name=name, role=role)
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+async def delete_user(db: AsyncSession, user_id: str) -> None:
+    """Deletes a user and cascades to domain_roles."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User '{user_id}' not found",
+        )
+
+    # Delete all domain roles for this user
+    roles_result = await db.execute(
+        select(DomainRole).where(DomainRole.user_id == user_id)
+    )
+    for role in roles_result.scalars().all():
+        await db.delete(role)
+
+    await db.delete(user)
+    await db.flush()
