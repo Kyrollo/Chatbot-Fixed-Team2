@@ -215,6 +215,7 @@ def _format_result(result: OCRResult, page_num: int) -> dict:
         "surya_score":        round(result.surya_score,  4) if result.surya_score  is not None else None,
         "processing_time_ms": result.processing_time_ms,
         "decision_reason":    result.decision_reason,
+        "detected_langs":     result.detected_langs,   # None = detection skipped/failed → env defaults used
     }
 
 

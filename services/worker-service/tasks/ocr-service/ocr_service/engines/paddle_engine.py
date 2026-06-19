@@ -97,7 +97,6 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 from typing import Any
 
 from PIL import Image
@@ -112,19 +111,44 @@ _models: dict[str, Any] = {}
 # ----------------------------------------------------------------------
 # Language configuration
 # ----------------------------------------------------------------------
+# Single source of truth: OCR_DETECT_LANGS drives detection (language_detector.py),
+# warm-up, AND the multi-language fallback sweep — so adding a language
+# to OCR_DETECT_LANGS in .env automatically propagates everywhere with
+# no code changes needed in any file.
+#
+# Individual overrides are still supported for fine-grained control:
+#   OCR_WARMUP_LANGS  — if set, overrides which langs are eagerly loaded at
+#                       worker startup (default: same as OCR_DETECT_LANGS)
+#   OCR_LANGS         — if set, overrides the fallback sweep langs when
+#                       language detection is disabled or fails
+#                       (default: same as OCR_DETECT_LANGS)
+#   OCR_LANG          — single-language mode when OCR_LANGS is empty
+#                       (default: "en")
+#
+# Typical .env for Arabic + English + French:
+#   OCR_DETECT_LANGS=ar,en,fr     ← one line controls everything
+# ----------------------------------------------------------------------
+
+# The base language list — everything else defaults to this.
+_OCR_DETECT_LANGS_RAW: str = os.getenv("OCR_DETECT_LANGS", "ar,en")
+_OCR_DETECT_LANGS: list[str] = [
+    c.strip() for c in _OCR_DETECT_LANGS_RAW.split(",") if c.strip()
+]
+
 # Languages eagerly loaded by warm_up_paddle_models() at process startup.
+# Default: same as OCR_DETECT_LANGS so warm-up always covers detected langs.
 OCR_WARMUP_LANGS: list[str] = [
     code.strip()
-    for code in os.getenv("OCR_WARMUP_LANGS", "ar,en").split(",")
+    for code in os.getenv("OCR_WARMUP_LANGS", _OCR_DETECT_LANGS_RAW).split(",")
     if code.strip()
 ]
 
 # Single-language mode (default): OCR_LANG, defaults to "en".
 OCR_LANG: str = os.getenv("OCR_LANG", "en")
 
-# Multi-language mode: comma-separated list, e.g. "ar,en,fr".
-# If set, run_paddle_ocr tries each language and keeps the best result.
-_OCR_LANGS_RAW = os.getenv("OCR_LANGS", "").strip()
+# Multi-language fallback sweep: used when detection is disabled or fails.
+# Default: same as OCR_DETECT_LANGS so the fallback covers the same set.
+_OCR_LANGS_RAW = os.getenv("OCR_LANGS", _OCR_DETECT_LANGS_RAW).strip()
 OCR_LANGS: list[str] = (
     [code.strip() for code in _OCR_LANGS_RAW.split(",") if code.strip()]
     if _OCR_LANGS_RAW
@@ -135,31 +159,6 @@ OCR_LANGS: list[str] = (
 # crash) or "paddle" (original native backend) — override via .env if
 # onnxruntime ever needs to be disabled for debugging.
 OCR_ENGINE: str = os.getenv("OCR_ENGINE", "onnxruntime")
-
-# ----------------------------------------------------------------------
-# Model source — FIX for cold-start hang/crash on first run
-# ----------------------------------------------------------------------
-# When a sub-model (e.g. "PP-OCRv6_medium_rec") isn't yet cached under
-# ~/.paddlex/official_models/, PaddleX tries sources in this order:
-#   huggingface -> aistudio -> modelscope
-# In this project, HF_HUB_OFFLINE is set (see hf_env.py), so the
-# huggingface attempt always fails immediately by design, aistudio
-# commonly fails too (region/availability), and PaddleX falls through to
-# modelscope.cn — a slow, occasionally-flaky download that previously
-# triggered a long stall on first run (and could surface as the worker
-# appearing to "hang" if the parent process's log reader also crashed —
-# see the UTF-8 fix in worker.py).
-#
-# Set PADDLE_PDX_MODEL_SOURCE=modelscope (or "aistudio"/"huggingface" if
-# you have access) in .env to skip straight to a working source instead
-# of paying the cost of two failed attempts on every cold cache. This is
-# PaddleX's own documented env var — we don't invent new behavior here,
-# just surface it so it's easy to find instead of buried in PaddleX
-# internals.
-_MODEL_SOURCE = os.getenv("PADDLE_PDX_MODEL_SOURCE", "").strip()
-if _MODEL_SOURCE:
-    os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", _MODEL_SOURCE)
-    logger.info("PaddleX model source pinned via PADDLE_PDX_MODEL_SOURCE=%s", _MODEL_SOURCE)
 
 # Optional accuracy toggles (off by default to keep the fast path fast —
 # image_processor.py already denoises/deskews/resizes before this runs).
@@ -252,19 +251,6 @@ def get_paddle_model(lang: str | None = None) -> Any:
     return _models[lang]
 
 
-def _is_model_cache_cold() -> bool:
-    """
-    Best-effort check for whether PaddleX's official model cache directory
-    exists yet. Used only to print a louder, more honest warning before a
-    cold warm-up — never raises, never blocks behavior either way.
-    """
-    try:
-        cache_dir = Path.home() / ".paddlex" / "official_models"
-        return not cache_dir.is_dir() or not any(cache_dir.iterdir())
-    except Exception:
-        return False
-
-
 def warm_up_paddle_models(langs: list[str] | None = None) -> None:
     """
     Eagerly loads and caches PaddleOCR pipelines for `langs` (default:
@@ -275,28 +261,10 @@ def warm_up_paddle_models(langs: list[str] | None = None) -> None:
     model-load latency. Languages already cached (e.g. warmed twice by
     mistake, or already used) are skipped — this is always safe to call
     more than once.
-
-    On a genuinely cold cache (no PaddleX models downloaded yet, e.g. a
-    fresh machine or fresh ~/.paddlex), this can take noticeably longer
-    than usual and may reach out to huggingface/aistudio/modelscope to
-    fetch sub-models (see PADDLE_PDX_MODEL_SOURCE above). We log a clear
-    warning before that happens so a slow first run is never mistaken for
-    a frozen process — see README Troubleshooting for the Windows
-    UnicodeDecodeError this can otherwise surface as.
     """
     targets = langs if langs is not None else OCR_WARMUP_LANGS
     if not targets:
         return
-
-    if _is_model_cache_cold():
-        logger.warning(
-            "PaddleX model cache looks empty (~/.paddlex/official_models). "
-            "First-time model downloads may take several minutes depending "
-            "on network speed and source availability (huggingface -> "
-            "aistudio -> modelscope fallback chain). This is expected on a "
-            "fresh machine, not a hang. Set PADDLE_PDX_MODEL_SOURCE in .env "
-            "to skip straight to a known-working source."
-        )
 
     logger.info("Warming up PaddleOCR for languages: %s", targets)
     for lang in targets:
@@ -337,16 +305,23 @@ def _run_single_language(img_bgr, lang: str) -> dict:
     }
 
 
-def run_paddle_ocr(image: Image.Image) -> dict:
+def run_paddle_ocr(image: Image.Image, langs: list[str] | None = None) -> dict:
     """
     Runs PaddleOCR on a PIL Image.
 
     Behavior:
-      - If OCR_LANGS is set (e.g. "ar,en,fr"), runs OCR once per language
-        and returns the result with the highest average word confidence.
-        This makes the engine effectively language-agnostic at the cost
-        of one PaddleOCR pass per configured language.
-      - Otherwise, runs OCR once using OCR_LANG (default "en").
+      - If `langs` is passed in (e.g. from pre-OCR language detection in
+        ocr_router.py — see language_detector.py), those languages are
+        used instead of the env-based defaults below. This lets the
+        router skip languages it already knows aren't present on the
+        page, instead of always brute-forcing every configured language.
+      - Otherwise (langs=None, i.e. detection wasn't used or failed):
+          - If OCR_LANGS is set (e.g. "ar,en,fr"), runs OCR once per
+            language and returns the result with the highest average
+            word confidence. This makes the engine effectively
+            language-agnostic at the cost of one PaddleOCR pass per
+            configured language.
+          - Otherwise, runs OCR once using OCR_LANG (default "en").
 
     All languages used here are served from the warm cache built by
     warm_up_paddle_models() at startup, UNLESS a language outside
@@ -368,7 +343,15 @@ def run_paddle_ocr(image: Image.Image) -> dict:
     img_rgb = np.array(image.convert("RGB"))
     img_bgr = img_rgb[:, :, ::-1]
 
-    langs = OCR_LANGS if OCR_LANGS else [OCR_LANG]
+    if langs:
+        # Caller (ocr_router.py) already decided which language(s) this
+        # page needs — e.g. via language_detector.py's CLIP-based
+        # detection — so use exactly that instead of the env defaults.
+        resolved_langs = langs
+    else:
+        resolved_langs = OCR_LANGS if OCR_LANGS else [OCR_LANG]
+
+    langs = resolved_langs
 
     if len(langs) == 1:
         return _run_single_language(img_bgr, langs[0])

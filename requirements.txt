@@ -26,6 +26,22 @@ httpx>=0.27,<0.28
 torch==2.6.0
 torchvision==0.21.0
 
+# -- CLIP (pre-OCR language detection in language_detector.py) ------------------
+# Uses open_clip_torch, NOT the original openai/CLIP package.
+# openai/CLIP's clip.load() calls torch.jit.load() then walks private
+# TorchScript internals (RecursiveScriptModule._construct) that aren't part
+# of torch's public API and get renamed/removed across versions without
+# warning. On torch==2.6.0 this fails with:
+#   AttributeError: type object 'RecursiveScriptModule' has no attribute '_construct'
+# open_clip_torch is the actively maintained successor, loads the identical
+# OpenAI-published ViT-B/32 weights (pretrained="openai") through a plain
+# nn.Module state_dict path instead of torch.jit.load, and isn't exposed to
+# this class of breakage. Pin >=2.24 to avoid the old protobuf<4 ceiling
+# that 2.20.x carried (this project already needs protobuf>=4.21.6).
+open_clip_torch>=2.24,<4.0
+ftfy
+regex
+
 # -- Auth -----------------------------------------------------------------------
 python-jose[cryptography]==3.3.0
 
