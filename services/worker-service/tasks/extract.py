@@ -84,6 +84,15 @@ def _ensure_ocr_service_on_path() -> None:
 _ensure_ocr_service_on_path()
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# BUG FIX: these two imports were missing entirely in the previous version of
+# this file (lost during the Camelot/table-extraction rewrite), even though
+# both _extract_pdf() and _extract_image() call them below. That caused:
+#   NameError: name 'pdf_page_to_image' is not defined
+# on every PDF page / image that needed OCR (i.e. every scanned page).
+# ──────────────────────────────────────────────────────────────────────────────
+from ocr_service.pipeline import run_ocr_on_image
+from ocr_service.preprocessing.image_processor import pdf_page_to_image
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -432,7 +441,6 @@ def _extract_image(file_path: str) -> list[dict]:
     """
     Routes a standalone image file (.png / .jpg / .jpeg) through the OCR pipeline.
     """
-    
 
     img    = Image.open(file_path).convert("RGB")
     result = run_ocr_on_image(img, page_num=1, deskew=True)
@@ -607,7 +615,7 @@ def _extract_doc(file_path: str) -> list[dict]:
             return res
         except Exception as e:
             logger.warning("Failed to convert legacy DOC using win32com: %s. Trying fallback.", e)
-    
+
     return _extract_doc_fallback(file_path)
 
 

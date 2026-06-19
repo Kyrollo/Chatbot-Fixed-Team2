@@ -13,6 +13,22 @@ Accepts a file path OR a PIL Image and handles:
 - Image files (PNG, JPG, JPEG)
 
 Returns a list of page results, one per page/image.
+
+WHAT CHANGED IN THIS REVISION
+------------------------------
+Added `warm_up_ocr_pipeline()` — a single entry point that eagerly loads
+both engines (PaddleOCR for OCR_WARMUP_LANGS, default "ar,en", and Surya)
+once at process/worker startup, so the FIRST real image/PDF page processed
+doesn't pay any model-load latency. Call this once, e.g. from the Celery
+worker's bootstrap (worker.py `worker_process_init` signal) or from
+main.py's FastAPI startup event:
+
+    from ocr_service.pipeline import warm_up_ocr_pipeline
+    warm_up_ocr_pipeline()
+
+Without this call, behavior is unchanged from before: each engine still
+lazily loads itself on first use and is cached from then on — warm-up is
+a pure startup-time optimization, not a correctness requirement.
 """
 from __future__ import annotations
 
@@ -39,6 +55,35 @@ logger = logging.getLogger(__name__)
 # lifetime. Bounded by LRU max size.
 _CACHE: dict[str, list[dict]] = {}
 _CACHE_MAX_ENTRIES = 64
+
+_warmed_up: bool = False
+
+
+def warm_up_ocr_pipeline(paddle_langs: list[str] | None = None) -> None:
+    """
+    Eagerly loads every OCR engine used by route_ocr() — PaddleOCR (for
+    each language in `paddle_langs`, default OCR_WARMUP_LANGS / "ar,en")
+    and Surya — so they're already resident in memory before the first
+    real OCR request arrives.
+
+    Call this ONCE at process startup. Safe to call more than once: each
+    engine's own warm-up function only loads languages/models that aren't
+    already cached, so a repeat call is a fast no-op.
+    """
+    global _warmed_up
+
+    from ocr_service.engines.paddle_engine import warm_up_paddle_models
+    from ocr_service.engines.surya_engine  import warm_up_surya_model
+
+    t_start = time.perf_counter()
+    logger.info("Warming up OCR pipeline (PaddleOCR + Surya)...")
+
+    warm_up_paddle_models(paddle_langs)
+    warm_up_surya_model()
+
+    elapsed = round((time.perf_counter() - t_start) * 1000, 1)
+    _warmed_up = True
+    logger.info("OCR pipeline warm-up complete in %.0f ms", elapsed)
 
 
 def run_ocr_pipeline(
@@ -170,6 +215,7 @@ def _format_result(result: OCRResult, page_num: int) -> dict:
         "surya_score":        round(result.surya_score,  4) if result.surya_score  is not None else None,
         "processing_time_ms": result.processing_time_ms,
         "decision_reason":    result.decision_reason,
+        "detected_langs":     result.detected_langs,   # None = detection skipped/failed → env defaults used
     }
 
 

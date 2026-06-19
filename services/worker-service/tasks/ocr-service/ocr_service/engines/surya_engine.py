@@ -7,6 +7,22 @@ Surya is a document-layout-aware OCR built on top of a transformer model.
 It excels at structured documents, mixed Arabic/English, and low-quality scans
 where PaddleOCR/EasyOCR's confidence drops.
 
+WHAT CHANGED IN THIS REVISION
+------------------------------
+Added `warm_up_surya_model()`, the Surya counterpart to
+`paddle_engine.warm_up_paddle_models()`. It eagerly triggers
+`_load_surya_models()` once at worker/process startup so Surya's
+detection + recognition (+ foundation, on newer surya-ocr) models are
+already loaded into memory before the first real image arrives — instead
+of paying that load cost mid-request the first time PaddleOCR's
+confidence drops below threshold and ocr_router falls back to Surya.
+
+Nothing about the actual recognition/detection logic changed — Surya is
+single-model (multilingual out of the box), so there is no per-language
+cache here the way paddle_engine.py has one; there is just one Surya
+pipeline, loaded once, reused for every page/image for the life of the
+process.
+
 BUG FIX (ModuleNotFoundError: No module named 'surya.ocr')
 ------------------------------------------------------------
 The previous version of this file used the old surya-ocr API:
@@ -124,6 +140,32 @@ def _load_surya_models() -> tuple[Any, Any]:
     return _recognition_predictor, _detection_predictor
 
 
+def warm_up_surya_model() -> None:
+    """
+    Eagerly loads Surya's models (foundation + recognition + detection) so
+    they're already resident in memory before the first real image needs
+    them — call this ONCE at worker/process startup, alongside
+    paddle_engine.warm_up_paddle_models().
+
+    If Surya fails to load (e.g. incompatible package, no internet for the
+    first-time model download), this logs and swallows the error rather
+    than crashing worker startup: ocr_router.py already falls back to
+    PaddleOCR/EasyOCR whenever Surya is unavailable, so a failed Surya
+    warm-up should not stop the worker from starting and serving requests.
+    Safe to call more than once — _load_surya_models() is itself a no-op
+    once already loaded (or already marked unavailable).
+    """
+    logger.info("Warming up Surya OCR...")
+    try:
+        _load_surya_models()
+        logger.info("Surya OCR warm-up complete")
+    except Exception:
+        logger.warning(
+            "Surya OCR warm-up failed — will retry lazily on first use, "
+            "and ocr_router will fall back to PaddleOCR if it keeps failing."
+        )
+
+
 def run_surya_ocr(image: Image.Image) -> dict:
     """
     Runs Surya OCR on a PIL Image.
@@ -149,7 +191,7 @@ def run_surya_ocr(image: Image.Image) -> dict:
         # __call__(images, langs, det_predictor=None, ...) — `langs` is a
         # required positional arg: one language list per image. "ar"+"en"
         # matches this project's Arabic/English documents (same languages
-        # passed to EasyOCR in paddle_engine.py).
+        # passed to PaddleOCR's warm-up set in paddle_engine.py).
         langs = [["ar", "en"]]
         predictions = rec_predictor([image], langs, det_predictor)
 
