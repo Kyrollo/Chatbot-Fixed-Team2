@@ -18,6 +18,12 @@ from tasks.index   import index_chunks, index_chunks_postgres, update_document_s
 # here instead of a separate microservice.
 from ner import extract_entities_for_chunks
 
+# Sprint 3 — Task 2.3: Relation Extraction. Runs after NER — see
+# relation_extraction.py's module docstring for why this uses one
+# Groq call per CHUNKS_PER_GROUP chunks instead of per-chunk or
+# whole-document calls, and why an LLM was chosen over spaCy.
+from relation_extraction import extract_relations_for_chunks
+
 from sqlalchemy import create_engine, text
 import os
 from dotenv import load_dotenv
@@ -79,14 +85,14 @@ def process_document_sync(document_id: str) -> dict:
     print(f"  Domain:      {domain_id}")
     print(f"  Source type: {source_type}")
 
-    print(f"\n[1/5] Extracting text from {source_type.upper()} file...")
+    print(f"\n[1/6] Extracting text from {source_type.upper()} file...")
     pages = extract_text(file_path)
     print(f"  Extracted {len(pages)} pages/segments")
 
     if not pages:
         raise ValueError(f"No text could be extracted from this {source_type.upper()} file.")
 
-    print("\n[2/5] Chunking text (semantic)...")
+    print("\n[2/6] Chunking text (semantic)...")
     chunks = chunk_pages(
         pages=pages,
         document_id=document_id,
@@ -99,10 +105,10 @@ def process_document_sync(document_id: str) -> dict:
     if not chunks:
         raise ValueError("No chunks were produced from this document.")
 
-    print("\n[3/5] Embedding chunks...")
+    print("\n[3/6] Embedding chunks...")
     chunks_with_vectors = embed_chunks(chunks)
 
-    print("\n[4/5] Indexing into Qdrant + PostgreSQL...")
+    print("\n[4/6] Indexing into Qdrant + PostgreSQL...")
     qdrant_count = index_chunks(chunks_with_vectors)
     pg_count     = index_chunks_postgres(chunks_with_vectors)
 
@@ -113,13 +119,28 @@ def process_document_sync(document_id: str) -> dict:
     # log it and continue — a document that's indexed for retrieval but
     # missing graph entities is a degraded experience; a document stuck
     # in "failed" because of a Sprint 3 add-on is a regression.
-    print("\n[5/5] Extracting entities (NER) for graph construction...")
+    print("\n[5/6] Extracting entities (NER) for graph construction...")
     entity_count = 0
+    chunks_with_entities = chunks_with_vectors
     try:
         chunks_with_entities = extract_entities_for_chunks(chunks_with_vectors)
         entity_count = sum(len(c.get("entities", [])) for c in chunks_with_entities)
     except Exception as exc:
         print(f"  [WARN] NER extraction failed, continuing without graph data: {exc}")
+
+    # Step 6 depends entirely on step 5's entities — same failure
+    # isolation logic applies (see comment above). Skipped automatically
+    # if entity_count is 0, since there's nothing to find relations between.
+    print("\n[6/6] Extracting relations (LLM) for graph construction...")
+    relation_count = 0
+    if entity_count > 0:
+        try:
+            triples = extract_relations_for_chunks(chunks_with_entities)
+            relation_count = len(triples)
+        except Exception as exc:
+            print(f"  [WARN] Relation extraction failed, continuing without graph relations: {exc}")
+    else:
+        print("  Skipped — no entities were found in step 5")
 
     update_document_status(document_id, "done")
 
@@ -128,6 +149,7 @@ def process_document_sync(document_id: str) -> dict:
     print(f"  Qdrant:      {qdrant_count} chunks indexed")
     print(f"  PostgreSQL:  {pg_count} chunks indexed (BM25)")
     print(f"  Entities:    {entity_count} extracted (NER)")
+    print(f"  Relations:   {relation_count} extracted (LLM)")
     print(f"{'='*50}\n")
 
     return {
@@ -135,6 +157,7 @@ def process_document_sync(document_id: str) -> dict:
         "pages":       len(pages),
         "chunks":      qdrant_count,
         "entities":    entity_count,
+        "relations":   relation_count,
         "source_type": source_type,
         "status":      "done",
     }
