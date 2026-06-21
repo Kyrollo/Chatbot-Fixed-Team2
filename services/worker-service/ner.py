@@ -92,6 +92,27 @@ def get_ner_model() -> Any:
     return _model
 
 
+import re
+
+def normalize_arabic(text: str) -> str:
+    """
+    Standardize Arabic text to handle spelling variants, diacritics, and spaces.
+    """
+    if not text:
+        return ""
+    # Strip diacritics (Harakat)
+    text = re.sub(r'[\u064B-\u0652]', '', text)
+    # Normalize Alif variants (أ, إ, آ, ٱ) -> ا
+    text = re.sub(r'[أإآٱ]', 'ا', text)
+    # Normalize Alif Maqsura (ى) -> Ya (ي)
+    text = re.sub(r'ى', 'ي', text)
+    # Normalize Ta Marbuta (ة) -> Ha (ه)
+    text = re.sub(r'ة', 'ه', text)
+    # Collapse multiple whitespaces and strip
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
 def extract_entities(text: str) -> list[dict]:
     """
     Runs NER on a single chunk of text using this project's ontology
@@ -99,17 +120,12 @@ def extract_entities(text: str) -> list[dict]:
     Policy, Role, Location, Skill), via GLiNER's semantic label phrasing
     (see GLINER_LABELS above).
 
-    Returns entities above CONFIDENCE_THRESHOLD only, already mapped
-    back to ontology names:
+    Returns entities above CONFIDENCE_THRESHOLD only, normalized and filtered,
+    mapped back to ontology names:
     [
-        {"text": "أحمد محمد", "label": "Person", "score": 0.97},
-        {"text": "قسم تقنية المعلومات", "label": "Department", "score": 0.89},
+        {"text": "أحمد محمد", "normalized_text": "احمد محمد", "label": "Person", "score": 0.97},
         ...
     ]
-
-    Returns an empty list for text with no recognized entities — this
-    is the expected, common case (e.g. the spike test's diabetes-guide
-    sentence had none), not an error condition.
     """
     if not text or not text.strip():
         return []
@@ -117,14 +133,31 @@ def extract_entities(text: str) -> list[dict]:
     model = get_ner_model()
     raw_entities = model.predict_entities(text, GLINER_LABELS, threshold=CONFIDENCE_THRESHOLD)
 
-    return [
-        {
-            "text": ent["text"],
-            "label": _LABEL_TO_ENTITY_TYPE[ent["label"]],
-            "score": round(float(ent["score"]), 4),
-        }
-        for ent in raw_entities
-    ]
+    results = []
+    seen = set()
+    for ent in raw_entities:
+        ent_text = ent["text"].strip()
+        # Noise filtering: min length 2, not purely digits/punctuation
+        if len(ent_text) < 2:
+            continue
+        if re.match(r'^[0-9\s\-_.,/\\()!?*&^%$#@!+=\[\]{}|;:<>`~"\']+$', ent_text):
+            continue
+        
+        label = _LABEL_TO_ENTITY_TYPE[ent["label"]]
+        norm = normalize_arabic(ent_text)
+        if not norm:
+            continue
+            
+        key = (norm, label)
+        if key not in seen:
+            seen.add(key)
+            results.append({
+                "text": ent_text,
+                "normalized_text": norm,
+                "label": label,
+                "score": round(float(ent["score"]), 4),
+            })
+    return results
 
 
 def extract_entities_for_chunks(chunks: list[dict]) -> list[dict]:

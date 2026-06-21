@@ -1513,6 +1513,12 @@ wsl --install -d Ubuntu-22.04
 The setup script (`wsl2_setup_v2.sh`, included in this repo) installs PostgreSQL 17, builds Apache AGE from source against it, configures it to accept connections from Windows, and creates the `rag_graph` graph.
 
 🟩 **Run inside WSL2 (Ubuntu terminal):**
+
+**Open ubuntu**
+```bash
+wsl -d Ubuntu-22.04
+```
+**Run script**
 ```bash
 chmod +x ~/wsl2_setup.sh
 ~/wsl2_setup.sh
@@ -1528,26 +1534,74 @@ What the script does, step by step:
 - Configures PostgreSQL to run on **port 5434** (avoids any collision with the existing PG16 on 5432)
 - Creates the `rag_graph` graph via `ag_catalog.create_graph()`
 
-#### 3. Verify Windows can reach it
+#### 3. Start Ubuntu WSL2 and PostgreSQL
 
-🟦 **Run in PowerShell (Windows, not WSL2):**
+Apache AGE runs inside Ubuntu WSL2. Before running any PostgreSQL commands from Windows, make sure the Ubuntu instance is running.
+
+🟦 **Run in PowerShell (Windows):**
+
+```powershell
+start "" wsl -d Ubuntu-22.04 -- bash -c "tail -f /dev/null"
+```
+
+Wait a few seconds, then verify:
+
+```powershell
+wsl -l -v
+```
+
+Expected:
+
+```text
+Ubuntu-22.04      Running
+```
+
+PostgreSQL is configured to start automatically inside Ubuntu via systemd.
+
+#### 4. Verify Windows can reach PostgreSQL
+
+🟦 **Run in PowerShell (Windows):**
+
 ```powershell
 psql -h localhost -p 5434 -U postgres -c "SELECT version();"
 ```
-Expected output includes `PostgreSQL 17.x`. If this fails, see [17.8 Troubleshooting](#178-sprint-3-troubleshooting).
 
-#### 4. Create the application database
+Expected output includes:
 
-🟦 **Run in PowerShell:**
+```text
+PostgreSQL 17.x
+```
+
+If the connection fails, verify that Ubuntu is running:
+
+```powershell
+wsl -l -v
+```
+
+If Ubuntu is stopped, start it again using Step 3.
+
+#### 5. Create the application database
+
+🟦 **Run in PowerShell (Windows):**
+
 ```powershell
 psql -h localhost -p 5434 -U postgres -c "CREATE DATABASE domain_db;"
 ```
 
-#### 5. Run the ontology migration
+If the database already exists, PostgreSQL will return:
+
+```text
+ERROR: database "domain_db" already exists
+```
+
+which is safe to ignore.
+
+#### 6. Run the ontology migration
 
 This creates the AGE extension inside `domain_db`, the entity/relation vertex and edge labels, and supporting indexes.
 
-🟦 **Run in PowerShell:**
+🟦 **Run in PowerShell (Windows):**
+
 ```powershell
 psql -h localhost -p 5434 -U postgres -d domain_db -f migrations/sprint3_foundation.sql
 ```
@@ -1630,9 +1684,51 @@ Takes the entities Step 5 found and determines the **relationships** between the
 
 Every triple the LLM returns is validated against `ontology.RELATION_TYPES` before being kept — a hallucinated relation type outside the 8 defined ones is dropped with a logged warning, not passed downstream.
 
-### 17.8 Sprint 3 Troubleshooting
+### 17.8 Query-Time Graph Retrieval & Routing
+
+At query time, the system uses a hybrid retrieval strategy that combines vector search, BM25 keyword search, and Apache AGE graph traversal.
+
+1. **Retrieval Router Decisions**: The `retrieval-service` uses `RetrievalRouter` to decide which engines to run. If `AGE_DATABASE_DSN` is configured, it scans the incoming query for relational keywords (e.g., "manages", "works in", "who is", "من يدير", "يعمل في", "مدير", "قسم" etc.) and checks for entities. If found, it automatically enables **Graph Retrieval** (`use_graph = True`).
+2. **Query-Time NER & Substring Matching**: The query is normalized (Arabic Harakat stripped, spelling variants unified) and checked against all node names in the current domain graph in Apache AGE to find matches.
+3. **Graph Traversal (1-Hop Match)**: For every matched entity, the `GraphRetriever` runs a Cypher traversal to fetch the entity, its relationships, and its immediately adjacent neighbors:
+   ```cypher
+   MATCH (v:{label})
+   WHERE v.normalized_name = $normalized_name AND v.domain_id = $domain_id
+   OPTIONAL MATCH (v)-[r]-(neighbor)
+   RETURN properties(v), properties(r), properties(neighbor)
+   ```
+4. **Source Chunk Resolution**: The retriever gathers the unique `chunk_ids` associated with the matched entities, relationships, and neighbors, then retrieves the raw text chunks and metadata from PostgreSQL `document_chunks`.
+5. **Score Fusion**: The graph-derived chunks are assigned a high priority score (`0.95`) and fused with Vector and BM25 results, ensuring highly relational context is prioritized in the prompt.
+
+### 17.9 Performance Measurement & Evaluation
+
+You can evaluate the accuracy, quality, and performance of the RAG system using the built-in services and logs.
+
+#### 1. LLM-as-a-Judge Evaluation
+- Start the optional evaluation service:
+  ```powershell
+  python run_services.py --evaluation
+  ```
+- Send a request to `POST http://localhost:8005/evaluate` containing the query, the generated answer, and the list of retrieved context chunks.
+- The service uses the judge model to perform semantic grading, returning a score from `0.0` (poorest) to `1.0` (perfect grounding) along with a detailed explanation of the faithfulness and completeness of the answer.
+
+#### 2. Query Performance & Audit Logging
+- Every RAG query and generated answer is logged to the `rag_query_logs` table in PostgreSQL.
+- To measure latency, cache hit ratios, and model efficiency, query the logs:
+  ```sql
+  -- Calculate total requests, cache hit rate, and breakdown by model:
+  SELECT 
+      model, 
+      COUNT(*) as total_queries, 
+      SUM(CASE WHEN cache_hit THEN 1 ELSE 0 END)::float / COUNT(*) as cache_hit_rate
+  FROM rag_query_logs 
+  GROUP BY model;
+  ```
+
+### 17.10 Sprint 3 Troubleshooting
 
 #### Windows can't reach `localhost:5434`
+
 
 - Confirm the WSL2 PostgreSQL service is running: inside WSL2, `sudo service postgresql status`
 - Confirm `listen_addresses = '*'` is set: `sudo cat /etc/postgresql/17/main/postgresql.conf | grep listen_addresses`

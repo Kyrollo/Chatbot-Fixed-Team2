@@ -23,6 +23,7 @@ from ner import extract_entities_for_chunks
 # Groq call per CHUNKS_PER_GROUP chunks instead of per-chunk or
 # whole-document calls, and why an LLM was chosen over spaCy.
 from relation_extraction import extract_relations_for_chunks
+from graph_writer import write_to_graph
 
 from sqlalchemy import create_engine, text
 import os
@@ -131,8 +132,9 @@ def process_document_sync(document_id: str) -> dict:
     # Step 6 depends entirely on step 5's entities — same failure
     # isolation logic applies (see comment above). Skipped automatically
     # if entity_count is 0, since there's nothing to find relations between.
-    print("\n[6/6] Extracting relations (LLM) for graph construction...")
+    print("\n[6/7] Extracting relations (LLM) for graph construction...")
     relation_count = 0
+    triples = []
     if entity_count > 0:
         try:
             triples = extract_relations_for_chunks(chunks_with_entities)
@@ -142,6 +144,21 @@ def process_document_sync(document_id: str) -> dict:
     else:
         print("  Skipped — no entities were found in step 5")
 
+    # Step 7 writes the extracted entities and relations to Apache AGE.
+    # Same failure isolation: failures here are logged and skipped so they
+    # do not prevent document ingestion.
+    print("\n[7/7] Writing entities and relations to Apache AGE graph...")
+    graph_status = "skipped"
+    if entity_count > 0:
+        try:
+            res = write_to_graph(chunks_with_entities, triples, domain_id, document_id)
+            graph_status = res.get("status", "error")
+            print(f"  Graph write status: {graph_status}")
+        except Exception as exc:
+            print(f"  [WARN] Writing to Apache AGE failed, continuing: {exc}")
+    else:
+        print("  Skipped — no entities to write to graph")
+
     update_document_status(document_id, "done")
 
     print(f"\nDocument {document_id} processed successfully")
@@ -150,6 +167,7 @@ def process_document_sync(document_id: str) -> dict:
     print(f"  PostgreSQL:  {pg_count} chunks indexed (BM25)")
     print(f"  Entities:    {entity_count} extracted (NER)")
     print(f"  Relations:   {relation_count} extracted (LLM)")
+    print(f"  Graph Write: {graph_status}")
     print(f"{'='*50}\n")
 
     return {
