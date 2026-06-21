@@ -11,6 +11,13 @@ from tasks.chunk   import chunk_pages
 from tasks.embed   import embed_chunks, get_model
 from tasks.index   import index_chunks, index_chunks_postgres, update_document_status
 
+# Sprint 3 — Task 2.2: Entity Extraction Worker.
+# Lives at the worker-service root (not tasks/) alongside ontology.py,
+# matching where config.py and hf_env.py already sit — see ner.py's
+# module docstring for why GLiNER is loaded as an in-process module
+# here instead of a separate microservice.
+from ner import extract_entities_for_chunks
+
 from sqlalchemy import create_engine, text
 import os
 from dotenv import load_dotenv
@@ -72,14 +79,14 @@ def process_document_sync(document_id: str) -> dict:
     print(f"  Domain:      {domain_id}")
     print(f"  Source type: {source_type}")
 
-    print(f"\n[1/4] Extracting text from {source_type.upper()} file...")
+    print(f"\n[1/5] Extracting text from {source_type.upper()} file...")
     pages = extract_text(file_path)
     print(f"  Extracted {len(pages)} pages/segments")
 
     if not pages:
         raise ValueError(f"No text could be extracted from this {source_type.upper()} file.")
 
-    print("\n[2/4] Chunking text (semantic)...")
+    print("\n[2/5] Chunking text (semantic)...")
     chunks = chunk_pages(
         pages=pages,
         document_id=document_id,
@@ -92,12 +99,27 @@ def process_document_sync(document_id: str) -> dict:
     if not chunks:
         raise ValueError("No chunks were produced from this document.")
 
-    print("\n[3/4] Embedding chunks...")
+    print("\n[3/5] Embedding chunks...")
     chunks_with_vectors = embed_chunks(chunks)
 
-    print("\n[4/4] Indexing into Qdrant + PostgreSQL...")
+    print("\n[4/5] Indexing into Qdrant + PostgreSQL...")
     qdrant_count = index_chunks(chunks_with_vectors)
     pg_count     = index_chunks_postgres(chunks_with_vectors)
+
+    # Step 5 runs AFTER indexing, deliberately. The Vector/BM25 RAG
+    # pipeline (steps 1-4) is the system's core function and must
+    # already be fully searchable before we touch anything graph-related.
+    # If NER throws (model download hiccup, unexpected input, etc.), we
+    # log it and continue — a document that's indexed for retrieval but
+    # missing graph entities is a degraded experience; a document stuck
+    # in "failed" because of a Sprint 3 add-on is a regression.
+    print("\n[5/5] Extracting entities (NER) for graph construction...")
+    entity_count = 0
+    try:
+        chunks_with_entities = extract_entities_for_chunks(chunks_with_vectors)
+        entity_count = sum(len(c.get("entities", [])) for c in chunks_with_entities)
+    except Exception as exc:
+        print(f"  [WARN] NER extraction failed, continuing without graph data: {exc}")
 
     update_document_status(document_id, "done")
 
@@ -105,12 +127,14 @@ def process_document_sync(document_id: str) -> dict:
     print(f"  Source type: {source_type}")
     print(f"  Qdrant:      {qdrant_count} chunks indexed")
     print(f"  PostgreSQL:  {pg_count} chunks indexed (BM25)")
+    print(f"  Entities:    {entity_count} extracted (NER)")
     print(f"{'='*50}\n")
 
     return {
         "document_id": document_id,
         "pages":       len(pages),
         "chunks":      qdrant_count,
+        "entities":    entity_count,
         "source_type": source_type,
         "status":      "done",
     }
