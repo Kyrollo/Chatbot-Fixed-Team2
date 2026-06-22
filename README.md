@@ -24,6 +24,7 @@ A complete backend + frontend stack for domain management, document ingestion, h
 14. [Troubleshooting](#14-troubleshooting)
 15. [Directory Layout](#15-directory-layout)
 16. [Quick Reference Card](#16-quick-reference-card)
+17. [Sprint 3 — Hybrid Graph RAG (Apache AGE)](#17-sprint-3--hybrid-graph-rag-apache-age)
 
 ---
 
@@ -932,9 +933,9 @@ All requests through the API gateway require: `Authorization: Bearer <JWT_ACCESS
 | **Java** | 17+ | [Adoptium Temurin](https://adoptium.net/). Required for Keycloak. |
 | **Groq API key** | Free tier | [Get one](https://console.groq.com). Primary LLM provider. |
 | **Microsoft Visual C++ Redistributable** | Latest x64 | [Download](https://aka.ms/vs/17/release/vc_redist.x64.exe). Required for PaddleOCR/PyTorch native extensions on Windows. |
-| **Ghostscript** | 10.x | [Download](https://www.ghostscript.com/releases/gsdnld.html). Required by Camelot for table extraction. After installation, verify with `gswin64c --version`. |
 | **RAM** | 8 GB min, 16 GB recommended | Embedding, reranking, PaddleOCR, and Surya models load into memory |
 | **Disk** | ~10 GB free | ML model caches (incl. OCR models) + infra downloads |
+| **WSL2 + PostgreSQL 17 + Apache AGE** | Sprint 3 only | Required only for the Graph layer — see [Section 17](#17-sprint-3--hybrid-graph-rag-apache-age). Runs alongside the PG16 install above, on a separate port (5434), and does not affect Sprints 1–2. |
 
 ### Auto-Downloaded (by `run_services.py` / on first OCR run)
 
@@ -980,14 +981,6 @@ pip install -U pip setuptools wheel
 # Install all required Python packages (includes ML models & extractors)
 pip install -r requirements.txt
 ```
-3. **Install Ghostscript** (required by Camelot for table extraction):
-   - Download the installer from the [Ghostscript Downloads Page](https://www.ghostscript.com/releases/gsdnld.html).
-   - Run the installer to complete setup.
-   - Verify the installation in your terminal:
-     ```powershell
-     gswin64c --version
-     ```
-   - Ensure the Ghostscript bin directory (typically `C:\Program Files\gs\gs10.XX.X\bin`) is added to your user/system `PATH` environment variable.
 > [!NOTE]
 > Installing dependencies may take 10–20 minutes as it downloads PyTorch CPU, PaddleOCR/PaddlePaddle, Surya, and other ML inference libraries (approx. 2-3 GB total).
 
@@ -1068,12 +1061,12 @@ psql -U postgres -d domain_db -c "SELECT 'users=' || count(*) FROM users UNION A
 ```
 
 #### 5. Database Migrations (For Upgrades)
-If you are upgrading the database schema to support task tracking and metadata logging without dropping your tables, run the migration python script:
+If you already have a database from Sprint 1 and wish to upgrade it without wiping and re-initializing, run the Sprint 2 migration script:
 
 🟦 **Run in PowerShell:**
 ```powershell
-.venv\Scripts\activate
-python run_migration.py
+$env:PGPASSWORD="your_postgres_password"
+psql -U postgres -d domain_db -f migrations/sprint2_migration.sql
 ```
 
 ---
@@ -1393,7 +1386,8 @@ Chatbot-Fixed-Team2/
 ├── README.md                         # this file — complete project guide
 ├── migrations/                       # database SQL scripts
 │   ├── init_db.sql                   # creates schema & populates seed data from scratch
-│   └── sprint2_migration.sql         # Sprint 2 migration (source_type column)
+│   ├── sprint2_migration.sql         # Sprint 2 migration (source_type column)
+│   └── sprint3_foundation.sql        # Sprint 3 — Apache AGE setup + ontology (run on PG17, not PG16)
 ├── data/                             # auto-created runtime data (gitignored)
 │   ├── qdrant/                       # embedded vector DB
 │   ├── uploads/                      # uploaded documents (PDF, DOCX, CSV, images)
@@ -1422,9 +1416,13 @@ Chatbot-Fixed-Team2/
     ├── retrieval-service/            # port 8003 (+ RBAC filtering)
     ├── generation-service/           # port 8004
     ├── evaluation-service/           # port 8005 (optional)
-    └── worker-service/               # Celery worker (multi-format + OCR)
+    └── worker-service/               # Celery worker (multi-format + OCR + Sprint 3 graph extraction)
+        ├── ontology.py                # Sprint 3 — entity/relation type definitions (single source of truth)
+        ├── ner.py                     # Sprint 3 — GLiNER entity extraction (lazy-loaded)
+        ├── relation_extraction.py     # Sprint 3 — LLM-based relation extraction (grouped, 20 chunks/call)
         └── tasks/
             ├── extract.py            # format routing, calls OCR pipeline for scans/images
+            ├── process.py            # 6-step pipeline: extract → chunk → embed → index → NER → relations
             └── ocr-service/
                 └── ocr_service/
                     ├── pipeline.py            # top-level OCR entry point
@@ -1468,4 +1466,298 @@ OCR config:
 
 ---
 
-*Last updated: June 2026 — Chatbot-Fixed-Team2 / Fixed Solutions AI Internship*
+## 17. Sprint 3 — Hybrid Graph RAG (Apache AGE)
+
+### 17.1 What This Sprint Adds
+
+Sprints 1–2 retrieve answers two ways: **dense vector search** (meaning) and **sparse BM25 search** (keywords). Both search *text similarity*. Neither can answer relationship questions like *"Who manages Project Alpha?"* — that requires a **knowledge graph**: entities (Person, Project, Department...) connected by typed relationships (MANAGES, BELONGS_TO...).
+
+Sprint 3 adds that graph layer on top of the existing system **without modifying any Sprint 1–2 code path**. If the graph layer fails for any reason, document ingestion and querying continue to work exactly as before — this is a deliberate design constraint, not an accident (see [17.6](#176-failure-isolation--why-the-graph-layer-cant-break-the-core-system)).
+
+### 17.2 Why Apache AGE Instead of Neo4j
+
+The original Sprint 3 requirements named Neo4j. This implementation uses **Apache AGE** instead — a PostgreSQL extension that adds graph capabilities to a regular Postgres database, rather than running a separate graph database server.
+
+| | Neo4j | Apache AGE (chosen) |
+|---|---|---|
+| Infrastructure | Separate DB server, separate container | Extension inside PostgreSQL — same engine already used by the rest of this project |
+| Domain isolation (RBAC) | Needs to be re-implemented for the graph DB | Reuses the same `domain_id` pattern already used in every other table |
+| Chunk↔Graph linking | Cross-database join required | Same database — can eventually be joined with `document_chunks` directly |
+| New failure point | Yes — an entire new service to keep running | No — same Postgres instance, same uptime story |
+
+### 17.3 Why a Second PostgreSQL Instance (via WSL2)
+
+Apache AGE has no prebuilt Windows binary for PostgreSQL 16 (the version this project already uses on port 5432). Two real options were evaluated:
+
+1. **Upgrade the existing PG16 to PG17 in place** — risks the working Sprint 1–2 database.
+2. **Run a second, separate PostgreSQL 17 + AGE instance inside WSL2** — zero risk to the existing PG16/port 5432 setup. **(Chosen.)**
+
+The original PostgreSQL 16 instance on port 5432 is **untouched** and keeps serving `domain-service`, `ingestion-service`, `retrieval-service`, and `generation-service` exactly as documented in [Section 12](#12-complete-from-scratch-setup--run-guide). The new PostgreSQL 17 + AGE instance runs inside WSL2 on **port 5434**, reachable from Windows like any other database — Windows-side Python services don't need to know WSL2 is involved.
+
+### 17.4 Setting Up PostgreSQL 17 + Apache AGE (WSL2)
+
+> [!NOTE]
+> This section is only required to use the Graph layer. Skipping it does not affect Sprints 1–2.
+
+#### 1. Open WSL2 (Ubuntu)
+
+If WSL2 with an Ubuntu distribution isn't installed yet, install it from an elevated PowerShell:
+
+🟦 **Run in PowerShell (as Administrator):**
+```powershell
+wsl --install -d Ubuntu-22.04
+```
+
+#### 2. Run the setup script
+
+The setup script (`wsl2_setup_v2.sh`, included in this repo) installs PostgreSQL 17, builds Apache AGE from source against it, configures it to accept connections from Windows, and creates the `rag_graph` graph.
+
+🟩 **Run inside WSL2 (Ubuntu terminal):**
+
+**Open ubuntu**
+```bash
+wsl -d Ubuntu-22.04
+```
+**Run script**
+```bash
+chmod +x ~/wsl2_setup.sh
+~/wsl2_setup.sh
+```
+
+> [!NOTE]
+> This script builds Apache AGE from source (`git checkout PG17/v1.6.0-rc0`, the official PG17-compatible release), which takes a few minutes. It also sets the `postgres` user's password — open the script before running it if you want a password other than the placeholder it ships with.
+
+What the script does, step by step:
+- Installs PostgreSQL 17 from the official PGDG APT repository (Ubuntu 22.04 only ships PG14 by default)
+- Installs build dependencies and compiles Apache AGE against PG17
+- Sets `listen_addresses = '*'` and adds a `pg_hba.conf` rule for `0.0.0.0/0` — required so Windows-side services (outside WSL2) can connect; still password-protected (`md5`)
+- Configures PostgreSQL to run on **port 5434** (avoids any collision with the existing PG16 on 5432)
+- Creates the `rag_graph` graph via `ag_catalog.create_graph()`
+
+#### 3. Start Ubuntu WSL2 and PostgreSQL
+
+Apache AGE runs inside Ubuntu WSL2. Before running any PostgreSQL commands from Windows, make sure the Ubuntu instance is running.
+
+🟦 **Run in PowerShell (Windows):**
+
+```powershell
+start "" wsl -d Ubuntu-22.04 -- bash -c "tail -f /dev/null"
+```
+
+Wait a few seconds, then verify:
+
+```powershell
+wsl -l -v
+```
+
+Expected:
+
+```text
+Ubuntu-22.04      Running
+```
+
+PostgreSQL is configured to start automatically inside Ubuntu via systemd.
+
+#### 4. Verify Windows can reach PostgreSQL
+
+🟦 **Run in PowerShell (Windows):**
+
+```powershell
+psql -h localhost -p 5434 -U postgres -c "SELECT version();"
+```
+
+Expected output includes:
+
+```text
+PostgreSQL 17.x
+```
+
+If the connection fails, verify that Ubuntu is running:
+
+```powershell
+wsl -l -v
+```
+
+If Ubuntu is stopped, start it again using Step 3.
+
+#### 5. Create the application database
+
+🟦 **Run in PowerShell (Windows):**
+
+```powershell
+psql -h localhost -p 5434 -U postgres -c "CREATE DATABASE domain_db;"
+```
+
+If the database already exists, PostgreSQL will return:
+
+```text
+ERROR: database "domain_db" already exists
+```
+
+which is safe to ignore.
+
+#### 6. Run the ontology migration
+
+This creates the AGE extension inside `domain_db`, the entity/relation vertex and edge labels, and supporting indexes.
+
+🟦 **Run in PowerShell (Windows):**
+
+```powershell
+psql -h localhost -p 5434 -U postgres -d domain_db -f migrations/sprint3_foundation.sql
+```
+
+**Expected output (abridged):**
+```text
+CREATE EXTENSION
+LOAD
+SET
+DO
+ create_vlabel   (×7 — Person, Project, Department, Policy, Role, Location, Skill)
+ create_elabel   (×8 — MANAGES, BELONGS_TO, REPORTS_TO, OWNS, HAS_ROLE, WORKS_ON, HAS_SKILL, BASED_AT)
+CREATE INDEX     (×7)
+```
+
+#### 6. Add Graph environment variables
+
+Append to `services/worker-service/.env` (create it from `.env.example` first if it doesn't exist yet — see [Section 12.2](#122-environment-configuration)):
+
+```text
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+GROQ_API_KEY=                              # same key used in Section 13
+GROQ_MODEL=llama-3.3-70b-versatile
+
+AGE_DATABASE_DSN=postgresql://postgres:YOUR_PASSWORD@localhost:5434/domain_db
+AGE_GRAPH_NAME=rag_graph
+```
+
+### 17.5 The Ontology
+
+Entity and relation types are defined **once**, in `services/worker-service/ontology.py`, and every Sprint 3 component (NER, relation extraction, the eventual graph writer) imports from that single file rather than hardcoding label strings.
+
+| Entity Types (7) | Relation Types (8) |
+|---|---|
+| Person, Project, Department, Policy, Role, Location, Skill | MANAGES, BELONGS_TO, REPORTS_TO, OWNS, HAS_ROLE, WORKS_ON, HAS_SKILL, BASED_AT |
+
+Adding a new type requires editing **both** `ontology.py` (Python) and re-running an updated `sprint3_foundation.sql` (creates the matching `vlabel`/`elabel` in AGE) — the two are not auto-synced.
+
+### 17.6 Failure Isolation — Why the Graph Layer Can't Break the Core System
+
+`tasks/process.py`'s pipeline grew from 4 steps (Sprint 2) to 6 steps:
+
+```text
+[1/6] Extract text          ─┐
+[2/6] Chunk (semantic)        │  Sprints 1–2 — unchanged,
+[3/6] Embed                   │  core RAG functionality
+[4/6] Index (Qdrant + PG)    ─┘
+[5/6] Extract entities (NER)  ─┐  Sprint 3 — additive.
+[6/6] Extract relations (LLM) ─┘  Wrapped in try/except; a failure here
+                                   logs a warning and the document still
+                                   completes with status="done".
+```
+
+Steps 5 and 6 run **after** indexing, deliberately — by the time the graph layer runs, the document is already fully searchable via Vector/BM25. If GLiNER or the relation-extraction LLM call fails (model download hiccup, missing `GROQ_API_KEY`, network issue), the document is **not** marked `failed`; it simply has 0 entities/relations and remains queryable through the existing Sprint 1–2 pipeline.
+
+### 17.7 Entity & Relation Extraction Pipeline
+
+#### Step 5 — NER (`ner.py`)
+
+Uses **GLiNER multilingual** (`urchade/gliner_multi-v2.1`), loaded lazily on first use (same pattern as `embed.py`'s embedding model, to avoid loading multiple ML models' worth of PyTorch/safetensors at Celery startup — see `embed.py`'s docstring for the Windows paging-file issue this avoids).
+
+Labels are sent to GLiNER as natural-language descriptions (e.g. `"a person name"` rather than the bare word `"Person"`) — a spike test on this project's actual Arabic documents (`Neuropsychology.pdf`) showed this phrasing produces measurably higher-confidence, more accurate matches than bare ontology words, since GLiNER is zero-shot and infers each label's meaning from the string itself.
+
+| Spike test result (real document sentences) | Entity | Confidence |
+|---|---|---|
+| "يُعد جون جاكسون أول من وضع الأساس..." | جون جاكسون → Person | 0.92 |
+| "أحمد محمد يدير مشروع تطوير النظام..." | أحمد محمد → Person | 0.97 |
+| (same sentence) | مشروع تطوير النظام → Project | 0.52 |
+| (same sentence) | قسم تقنية المعلومات → Department | 0.89 |
+
+`CONFIDENCE_THRESHOLD = 0.6` (in `ner.py`) filters out low-confidence noise (e.g. a borderline `"خبرة"` / "experience" match scored 0.62 in testing — too generic a noun to be a reliable `Skill` entity on its own).
+
+#### Step 6 — Relation Extraction (`relation_extraction.py`)
+
+Takes the entities Step 5 found and determines the **relationships** between them — e.g. turning `[Person: أحمد محمد]` + `[Project: مشروع تطوير النظام]` into the triple `(أحمد محمد, MANAGES, مشروع تطوير النظام)`.
+
+**Why an LLM (Groq) instead of spaCy dependency parsing:** spaCy has no official Arabic dependency parser — `ar_core_news_sm` does not exist in spaCy's model catalog. Community attempts require manually symlinking files into spaCy's own package directory and are not production-viable. Published academic Arabic dependency-parsing accuracy tops out around 76% (vs ~88% for English) even with dedicated research tooling spaCy doesn't have. An LLM that reads the sentence directly was the more reliable option investigated for this sprint.
+
+**Why grouped, not per-chunk or whole-document:** calling Groq once per chunk would mean ~200 calls for a 200-chunk document (slow, costly); one call for an entire document risks exceeding context limits. `CHUNKS_PER_GROUP = 20` batches chunks in original document order — roughly 10 LLM calls for a 200-chunk document. This is a deliberate trade-off: a relation whose subject and object fall in different groups (e.g. chunk 18 and chunk 22) will be missed. No fallback LLM (e.g. local Ollama) is configured for this step yet — if `GROQ_API_KEY` is unset or the call fails, that group's relations are simply skipped (see [17.6](#176-failure-isolation--why-the-graph-layer-cant-break-the-core-system)).
+
+Every triple the LLM returns is validated against `ontology.RELATION_TYPES` before being kept — a hallucinated relation type outside the 8 defined ones is dropped with a logged warning, not passed downstream.
+
+### 17.8 Query-Time Graph Retrieval & Routing
+
+At query time, the system uses a hybrid retrieval strategy that combines vector search, BM25 keyword search, and Apache AGE graph traversal.
+
+1. **Retrieval Router Decisions**: The `retrieval-service` uses `RetrievalRouter` to decide which engines to run. If `AGE_DATABASE_DSN` is configured, it scans the incoming query for relational keywords (e.g., "manages", "works in", "who is", "من يدير", "يعمل في", "مدير", "قسم" etc.) and checks for entities. If found, it automatically enables **Graph Retrieval** (`use_graph = True`).
+2. **Query-Time NER & Substring Matching**: The query is normalized (Arabic Harakat stripped, spelling variants unified) and checked against all node names in the current domain graph in Apache AGE to find matches.
+3. **Graph Traversal (1-Hop Match)**: For every matched entity, the `GraphRetriever` runs a Cypher traversal to fetch the entity, its relationships, and its immediately adjacent neighbors:
+   ```cypher
+   MATCH (v:{label})
+   WHERE v.normalized_name = $normalized_name AND v.domain_id = $domain_id
+   OPTIONAL MATCH (v)-[r]-(neighbor)
+   RETURN properties(v), properties(r), properties(neighbor)
+   ```
+4. **Source Chunk Resolution**: The retriever gathers the unique `chunk_ids` associated with the matched entities, relationships, and neighbors, then retrieves the raw text chunks and metadata from PostgreSQL `document_chunks`.
+5. **Score Fusion**: The graph-derived chunks are assigned a high priority score (`0.95`) and fused with Vector and BM25 results, ensuring highly relational context is prioritized in the prompt.
+
+### 17.9 Performance Measurement & Evaluation
+
+You can evaluate the accuracy, quality, and performance of the RAG system using the built-in services and logs.
+
+#### 1. LLM-as-a-Judge Evaluation
+- Start the optional evaluation service:
+  ```powershell
+  python run_services.py --evaluation
+  ```
+- Send a request to `POST http://localhost:8005/evaluate` containing the query, the generated answer, and the list of retrieved context chunks.
+- The service uses the judge model to perform semantic grading, returning a score from `0.0` (poorest) to `1.0` (perfect grounding) along with a detailed explanation of the faithfulness and completeness of the answer.
+
+#### 2. Query Performance & Audit Logging
+- Every RAG query and generated answer is logged to the `rag_query_logs` table in PostgreSQL.
+- To measure latency, cache hit ratios, and model efficiency, query the logs:
+  ```sql
+  -- Calculate total requests, cache hit rate, and breakdown by model:
+  SELECT 
+      model, 
+      COUNT(*) as total_queries, 
+      SUM(CASE WHEN cache_hit THEN 1 ELSE 0 END)::float / COUNT(*) as cache_hit_rate
+  FROM rag_query_logs 
+  GROUP BY model;
+  ```
+
+### 17.10 Sprint 3 Troubleshooting
+
+#### Windows can't reach `localhost:5434`
+
+
+- Confirm the WSL2 PostgreSQL service is running: inside WSL2, `sudo service postgresql status`
+- Confirm `listen_addresses = '*'` is set: `sudo cat /etc/postgresql/17/main/postgresql.conf | grep listen_addresses`
+- Confirm the `pg_hba.conf` rule exists: `sudo cat /etc/postgresql/17/main/pg_hba.conf | grep 0.0.0.0`
+- Restart PostgreSQL inside WSL2: `sudo service postgresql restart`
+
+#### `extension "age" is not available`
+
+The AGE build didn't install correctly. Re-run the build step from `wsl2_setup_v2.sh` (Steps 4–5) inside WSL2 and check for compile errors in the output.
+
+#### NER step is very slow on first document
+
+Expected — GLiNER downloads (~500 MB–1 GB) and loads on the **first** document processed after a worker restart, same lazy-loading behavior as the embedding and reranker models. Subsequent documents are fast.
+
+#### Step 6 logs `GROQ_API_KEY not set — skipping relation extraction`
+
+Add `GROQ_API_KEY` to `services/worker-service/.env` (see [17.4, step 6](#174-setting-up-postgresql-17--apache-age-wsl2)). Until then, Step 5 (NER) still runs normally — only relation extraction is skipped.
+
+#### `UnicodeDecodeError: 'charmap' codec can't decode byte ...` in worker logs
+
+Same root cause as the existing [Unicode errors in worker output](#unicode-errors-in-worker-output-on-windows) entry in Section 14 — Windows' terminal defaults to `cp1252`, which can't render Arabic log output. Run before starting:
+
+🟦 **Run in PowerShell:**
+```powershell
+$env:PYTHONUTF8=1
+chcp 65001
+```
+
+---
+
+
+
