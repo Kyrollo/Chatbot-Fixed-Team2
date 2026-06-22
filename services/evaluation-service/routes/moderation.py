@@ -2,19 +2,6 @@
 routes/moderation.py
 -----------------------
 Small FastAPI router for the human review side of the moderation queue.
-
-Mount this in evaluation-service's main.py alongside the existing
-/evaluate router:
-
-    from routes.moderation import router as moderation_router
-    app.include_router(moderation_router, prefix="/moderation")
-
-This is intentionally separate from the existing router.py so the
-original /evaluate endpoint is never touched by this change.
-
-Request/response models live in schemas.py (see schemas_additions.py for
-the exact models to merge in) — not defined inline here, so all of
-evaluation-service's Pydantic models stay in one place.
 """
 import uuid
 
@@ -26,6 +13,7 @@ from schemas import (
     ModerationQueueResponse,
 )
 from db.queries import list_pending_moderation_items, decide_moderation_item
+from metrics import moderation_queue_size  # FIX: added import
 
 router = APIRouter()
 
@@ -38,15 +26,14 @@ async def get_moderation_queue():
     one call.
     """
     items = list_pending_moderation_items()
+    moderation_queue_size.set(len(items))  # FIX: update gauge on every call
     return {"count": len(items), "items": items}
 
 
 @router.post("/{item_id}/decide", response_model=ModerationDecisionOut)
 async def submit_decision(item_id: uuid.UUID, body: ModerationDecision):
     """
-    Records a human reviewer's approve/reject decision. This is the
-    write side of the audit trail — every decision made here is
-    permanently recorded with who made it and when.
+    Records a human reviewer's approve/reject decision.
     """
     if body.decision not in ("approved", "rejected"):
         raise HTTPException(status_code=422, detail="decision must be 'approved' or 'rejected'")

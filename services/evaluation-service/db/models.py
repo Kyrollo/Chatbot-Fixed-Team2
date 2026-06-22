@@ -9,51 +9,33 @@ modifying it — evaluation happens after the fact, often much later, and
 keeping it in its own table means a slow/broken evaluation run can never
 corrupt or lock the original query log.
 
-CORRECTED AGAINST THE REAL SCHEMA
------------------------------------
-An earlier draft of this file used UUID for query_id, which is WRONG.
-Per the real rag_query_logs ERD in README.md, that table's `id` column is
-`bigint` (an auto-incrementing integer), not a UUID. query_id below is
-now BigInteger to match — using UUID against a bigint column would have
-caused a type error on the very first real insert. evaluation_logs.id and
-moderation_queue.id stay as UUID since those are this pipeline's OWN
-tables, designed from scratch here — only query_id (which references
-rag_query_logs.id) needed correcting.
+SCHEMA — corrected against the real rag_query_logs ERD
+--------------------------------------------------------
+rag_query_logs.id is `bigint` (auto-increment integer), NOT a UUID.
+query_id in EvaluationLog and ModerationQueueItem is BigInteger to match.
 
-NEW IN THIS FIX — three problems addressed
----------------------------------------------
-1. "rag_query_logs does not store retrieved context / reference answers"
-   -> LiveEvaluationCache. The live POST /evaluate endpoint (router.py /
-      judge.py) already receives context_chunks (and, going forward,
-      optionally a reference answer) from the CALLER on every request —
-      that data simply used to be thrown away after scoring. Now it is
-      saved here, keyed by a hash of (query, answer), the moment a live
-      evaluation happens. The scheduled batch job
-      (tasks/evaluate_batch.py) then looks up this table by the same
-      hash when it later samples a row from rag_query_logs, recovering
-      the context/reference that rag_query_logs itself never stored.
-      This is a pragmatic fix that requires NO changes to
-      generation-service or rag_query_logs — it only works for rows that
-      were actually scored once live (i.e. went through /evaluate at
-      answer time). Rows that were never scored live still have no
-      context recoverable after the fact; that part of the limitation is
-      structural and can only be fully solved by generation-service
-      persisting context into rag_query_logs directly.
+THREE PRODUCTION ISSUES FIXED IN THIS FILE
+--------------------------------------------
+Issue 1 — Missing Retrieved Context
+    rag_query_logs has NO context column. Context is only available at
+    request time (POST /evaluate). LiveEvaluationCache stores it there
+    keyed by SHA-256(query+answer), and evaluate_batch.py looks it up
+    by that same hash when processing a sampled row.
 
-2. "prevent duplicate evaluation" -> query_id now has a UNIQUE constraint
-   combined with model_used (see EvaluationLog.__table_args__) PLUS
-   db/queries.py's save path uses an upsert (INSERT ... ON CONFLICT DO
-   NOTHING) so the same (query_id, model_used) pair can never be written
-   twice, even under concurrent/retried task execution. This is stronger
-   than the old "NOT EXISTS" pre-check alone, which has a race window
-   between the check and the insert.
+Issue 2 — Duplicate Evaluations
+    EvaluationLog now has a UniqueConstraint("query_id", "model_used"),
+    enforced at the database level. db/queries.save_evaluation_result()
+    uses INSERT ... ON CONFLICT DO NOTHING for a race-free upsert.
+    flag_for_moderation() also has a unique constraint on query_id to
+    prevent double-flagging.
 
-3. "track last evaluated record" -> EvalCursor. A single-row table that
-   stores the highest rag_query_logs.id the batch job has successfully
-   processed up to. Each run reads the cursor, evaluates rows with
-   id > cursor, and advances the cursor at the end — replacing the old
-   "look back N minutes and hope nothing was missed or double-counted"
-   sliding time window with a deterministic, monotonic watermark.
+Issue 3 — Evaluation Progress Tracking
+    EvalCursor replaces the old "last N minutes" sliding window with a
+    deterministic, monotonically-advancing watermark. Each run reads the
+    cursor, processes rows with id > cursor, then advances the cursor.
+    This means no row is ever re-evaluated (even if the job restarts),
+    and no row is ever silently skipped because the lookback window moved
+    past it.
 """
 from __future__ import annotations
 
@@ -71,6 +53,7 @@ from sqlalchemy import (
     Text,
     ForeignKey,
     UniqueConstraint,
+    Index,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base
@@ -80,11 +63,14 @@ Base = declarative_base()
 
 def context_cache_key(query: str, answer: str) -> str:
     """
-    Deterministic key used to match a live /evaluate call back to the
-    rag_query_logs row the batch job later samples for the SAME
-    query+answer pair. SHA-256 of the exact query+answer text — if either
-    differs by even one character the lookup simply misses (falls back to
-    no context, same as today), it never matches the wrong row.
+    Deterministic 64-char hex key: SHA-256 of (query + separator + answer).
+    Used to correlate a live /evaluate call (which has context) with the
+    rag_query_logs row (which has no context column) the batch job later
+    samples for the same query+answer pair.
+
+    The separator U+241F (UNIT SEPARATOR) is chosen because it cannot
+    appear in normal prose, making accidental collisions between
+    (query="A", answer="BC") and (query="AB", answer="C") impossible.
     """
     raw = f"{query.strip()}\u241f{answer.strip()}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
@@ -92,142 +78,192 @@ def context_cache_key(query: str, answer: str) -> str:
 
 class EvaluationLog(Base):
     """
-    One row per (query, judge run). A single query_id can have more than
-    one row here if it's evaluated more than once — e.g. once by the
-    custom judge (model_used="custom_judge") and once by RAGAS
-    (model_used="ragas") — both are stored, never overwritten, so you can
-    compare what each judge said about the same answer.
+    One row per (query_id, judge) evaluation run.
+
+    A single query can have TWO rows here — one for model_used="custom_judge"
+    and one for model_used="ragas" — but never two rows for the same
+    (query_id, model_used) pair. The UniqueConstraint enforces this at the
+    database level, and queries.save_evaluation_result() uses an upsert so
+    concurrent/retried task calls are safe no-ops, not duplicate inserts.
     """
     __tablename__ = "evaluation_logs"
 
     id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     query_id    = Column(BigInteger, nullable=False, index=True)
-    # ^ references rag_query_logs.id (bigint, NOT uuid — see module
-    #   docstring). Not a hard FK constraint on purpose, so this table
-    #   works even if rag_query_logs lives in a different logical area
-    #   or gets partitioned/archived later.
+    # ^ references rag_query_logs.id (bigint). Not a hard FK on purpose:
+    #   evaluation_logs may live longer than rag_query_logs rows (if those
+    #   are ever archived/partitioned), and this service shouldn't need DDL
+    #   access to the generation-service's table to create its own schema.
 
-    model_used        = Column(String, nullable=False)   # "custom_judge" | "ragas"
+    model_used  = Column(String, nullable=False)  # "custom_judge" | "ragas"
 
-    # Shared fields — populated by BOTH the custom judge and RAGAS, using
-    # whichever of their own metrics maps closest to each one.
-    faithfulness_score = Column(Float, nullable=True)
-    relevance_score    = Column(Float, nullable=True)
-    completeness_score = Column(Float, nullable=True)
+    # Shared score fields — populated by both judges (mapping their own
+    # metric names onto these shared slots).
+    faithfulness_score  = Column(Float, nullable=True)
+    relevance_score     = Column(Float, nullable=True)
+    completeness_score  = Column(Float, nullable=True)
     overall_score       = Column(Float, nullable=True)
 
-    # RAGAS-specific metrics — NULL for model_used="custom_judge" rows,
-    # since the custom judge doesn't compute these.
-    # Group B metrics (context_precision, context_recall,
-    # context_entity_recall, answer_correctness, answer_similarity) are
-    # also NULL on live production rows with no reference answer — that's
-    # expected, not an error; see tasks/ragas_judge.py's module docstring.
-    ragas_context_precision    = Column(Float, nullable=True)
+    # RAGAS-specific metrics — NULL for model_used="custom_judge" rows.
+    # Group B metrics (context_precision … answer_similarity) are also
+    # NULL on rows evaluated without a reference answer — that is expected
+    # and normal for live production traffic, not an error.
+    ragas_context_precision     = Column(Float, nullable=True)
     ragas_context_recall        = Column(Float, nullable=True)
     ragas_context_entity_recall = Column(Float, nullable=True)
     ragas_answer_correctness    = Column(Float, nullable=True)
-    ragas_answer_similarity      = Column(Float, nullable=True)
+    ragas_answer_similarity     = Column(Float, nullable=True)
 
-    raw_judge_response  = Column(Text, nullable=True)     # full judge output, for debugging
+    raw_judge_response = Column(Text, nullable=True)  # full judge output for debugging
 
-    evaluated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    evaluated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
     __table_args__ = (
-        # FIX (duplicate evaluation): the same query can never be scored
-        # twice by the same judge. Enforced at the DATABASE level, not
-        # just in Python, so it holds even if two Celery workers ever run
-        # at once or a task is retried after a partial failure.
-        UniqueConstraint("query_id", "model_used", name="uq_evaluation_logs_query_judge"),
+        # FIX Issue 2 — Duplicate Evaluations
+        # The same query can never be scored twice by the same judge, even
+        # under concurrent Celery workers or task retries.  This is
+        # enforced at the database level (not just in Python), so it holds
+        # regardless of race conditions.
+        UniqueConstraint(
+            "query_id", "model_used",
+            name="uq_evaluation_logs_query_judge",
+        ),
+        # Composite index for the list_pending_moderation_items JOIN and
+        # any analytical queries filtering by model_used.
+        Index("ix_evaluation_logs_query_model", "query_id", "model_used"),
     )
 
 
 class ModerationQueueItem(Base):
     """
-    One row per answer flagged for human review. Created by
-    tasks/moderation.py whenever an EvaluationLog's overall_score falls
-    below the moderation threshold.
+    One row per answer flagged for human review.
+
+    A single query_id can appear at most ONCE (unique constraint) — if both
+    the custom judge and RAGAS flag the same answer, only the first flag is
+    kept; the second is a silent no-op (see queries.flag_for_moderation).
     """
     __tablename__ = "moderation_queue"
 
     id                = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    query_id          = Column(BigInteger, nullable=False, index=True)  # references rag_query_logs.id (bigint)
-    evaluation_log_id = Column(UUID(as_uuid=True), ForeignKey("evaluation_logs.id"), nullable=False)
+    query_id          = Column(BigInteger, nullable=False, index=True)
+    evaluation_log_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("evaluation_logs.id"),
+        nullable=False,
+    )
 
-    status   = Column(String, nullable=False, default="pending")  # pending | approved | rejected
-    reviewer = Column(String, nullable=True)    # who made the decision
+    status         = Column(String, nullable=False, default="pending")
+    reviewer       = Column(String, nullable=True)
     decision_notes = Column(Text, nullable=True)
 
-    created_at  = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    decided_at  = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    decided_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        # FIX Issue 2 — Duplicate moderation entries
+        # Prevents the same query_id appearing twice in the queue, even if
+        # both judges score it low and both try to flag it.
+        UniqueConstraint("query_id", name="uq_moderation_queue_query_id"),
+    )
 
 
 class LiveEvaluationCache(Base):
     """
-    FIX (retrieved context / reference answers not stored): every time
-    the live POST /evaluate endpoint runs (router.py -> judge.py), the
-    caller (generation-service) sends context_chunks — and, going
-    forward, may optionally send a reference answer — that are normally
-    thrown away after scoring. This table saves them, keyed by a hash of
-    the exact (query, answer) text (see context_cache_key() above).
+    FIX Issue 1 — Missing Retrieved Context
 
-    Later, when the scheduled batch job (tasks/evaluate_batch.py) samples
-    a row from rag_query_logs — which has NO context column of its own —
-    it computes the same hash from that row's query+answer and looks it
-    up here. If a live evaluation already happened for that exact
-    query+answer, the real retrieved context (and reference, if any) is
-    recovered and used for RAGAS faithfulness / Group B metrics instead
-    of silently scoring with no context at all.
+    rag_query_logs has no context column. Every time the live POST /evaluate
+    endpoint runs, the caller (generation-service) sends context_chunks that
+    are scored by the judge and then — before this fix — thrown away.
 
-    This is keyed by content hash, not query_id, on purpose: the live
-    /evaluate endpoint is called by generation-service at answer time and
-    has no rag_query_logs.id to attach to (EvaluationRequest has no
-    query_id field — see schemas.py) — by the time /evaluate runs, the
-    log row may not even be committed yet. Matching on the exact
-    query+answer text is the only correlation available without changing
-    generation-service itself.
+    This table saves those context_chunks (plus an optional reference answer)
+    keyed by SHA-256(query+answer) the moment a live evaluation occurs.
+    The scheduled batch job (tasks/evaluate_batch.py) computes the same
+    hash when it samples a row from rag_query_logs and looks up the stored
+    context here, giving RAGAS real retrieved chunks instead of always
+    running with context=None.
 
-    Rows are kept for `ttl_hours` worth of inspection value, then can be
-    pruned by prune_old_cache_entries() in db/queries.py — this table is
-    a short-lived bridge, not a permanent archive (evaluation_logs is the
-    permanent record once the batch job has run).
+    Limitation: this only works for rows that were scored live through
+    POST /evaluate. Rows written directly to rag_query_logs without
+    calling /evaluate still have no recoverable context — solving that
+    completely requires generation-service to persist context into
+    rag_query_logs directly, which is outside this service's scope.
+
+    Design choice — keyed by content hash, not query_id:
+    The live /evaluate endpoint is called at answer-generation time, when
+    the rag_query_logs row may not yet be committed (no query_id available
+    to the caller). Matching on the exact query+answer text is the only
+    correlation available without changes to generation-service.
+
+    Rows are pruned after LIVE_CACHE_TTL_HOURS (default 7 days) by
+    prune_old_cache_entries() — this table is a short-lived bridge, not
+    a permanent archive (evaluation_logs is the permanent record).
     """
     __tablename__ = "live_evaluation_cache"
 
-    id              = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    cache_key       = Column(String(64), nullable=False, unique=True, index=True)  # context_cache_key()
+    id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cache_key   = Column(String(64), nullable=False, unique=True, index=True)
 
     query           = Column(Text, nullable=False)
     answer          = Column(Text, nullable=False)
-    context_chunks  = Column(Text, nullable=True)   # JSON-encoded list[str], as received in context_chunks
-    reference       = Column(Text, nullable=True)   # optional ground-truth answer, if the caller supplied one
+    context_chunks  = Column(Text, nullable=True)   # JSON-encoded list[str]
+    reference       = Column(Text, nullable=True)   # optional ground-truth answer
 
-    consumed        = Column(Boolean, nullable=False, default=False)
-    # ^ set True once the batch job successfully matches and uses this
-    #   row for a rag_query_logs row, so re-runs don't keep re-reading it
-    #   (not that re-reading would corrupt anything — it's just noise).
+    consumed    = Column(Boolean, nullable=False, default=False)
+    # ^ True once the batch job uses this row.  Does NOT trigger deletion
+    #   (the same query+answer could be sampled again); it is purely an
+    #   observability flag so you can see via SQL which entries were used.
 
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
 
 class EvalCursor(Base):
     """
-    FIX (tracking the last evaluated record): a single-row table holding
-    the highest rag_query_logs.id the batch job has successfully finished
-    processing. Replaces the old approach of re-scanning a sliding
-    "last N minutes" time window on every run, which could either miss
-    rows (if a run was late by more than the lookback window) or
-    needlessly re-scan rows already evaluated (relying solely on the
-    evaluation_logs NOT EXISTS check to skip them).
+    FIX Issue 3 — Evaluation Progress Tracking
 
-    There is normally exactly one row here, with id="default" — see
-    db/queries.py's get_cursor()/advance_cursor(). Using a named singleton
-    row (rather than a one-column/one-row table with no key) keeps the
-    door open for a second named cursor later (e.g. a separate cursor per
-    domain_id) without a schema change.
+    A single-row table that stores the highest rag_query_logs.id the batch
+    job has successfully finished processing.
+
+    Before this fix the batch job re-scanned a "last N minutes" sliding time
+    window on every run. That approach had two failure modes:
+      - Miss: if a run was delayed by more than the lookback window, rows
+        written during the gap would never be evaluated.
+      - Re-scan: rows already evaluated would be checked again on every run
+        (relying solely on the NOT EXISTS guard to skip them), wasting DB
+        resources that grow with table size.
+
+    The cursor replaces both with a single, monotonically-advancing integer
+    watermark:
+      - get_cursor() → the id already processed up to (0 on first run)
+      - advance_cursor(n) → move the watermark forward to n (never backward)
+      - fetch_sample_query_ids() → pulls rows with id > cursor
+
+    On the very first run (cursor == 0), a EVAL_LOOKBACK_MINUTES time bound
+    is also applied so a fresh install doesn't attempt to evaluate years of
+    history in one shot.
+
+    The singleton row uses name="default" as its primary key. Using a named
+    key instead of a single-column table keeps the option open for multiple
+    named cursors (e.g. one per domain_id) without a schema change.
     """
     __tablename__ = "eval_cursor"
 
-    name              = Column(String(64), primary_key=True, default="default")
-    last_query_id      = Column(BigInteger, nullable=False, default=0)
-    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
-                         onupdate=lambda: datetime.now(timezone.utc))
+    name           = Column(String(64), primary_key=True, default="default")
+    last_query_id  = Column(BigInteger, nullable=False, default=0)
+    updated_at     = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
