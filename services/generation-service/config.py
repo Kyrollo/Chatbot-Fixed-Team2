@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
+        env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -21,6 +22,7 @@ class Settings(BaseSettings):
 
     # Retrieval service
     RETRIEVAL_SERVICE_URL: str = "http://localhost:8003"
+    RETRIEVAL_TIMEOUT_SECONDS: int = 300
 
     KEYCLOAK_ISSUER: str = "http://localhost:8180/realms/rag-system"
     KEYCLOAK_REALM_URL: str = "http://localhost:8180/realms/rag-system"
@@ -40,6 +42,10 @@ class Settings(BaseSettings):
     TOP_K_RERANK: int = 5
     DEFAULT_MAX_TOKENS: int = 512
     DEFAULT_TEMPERATURE: float = 0.2
+    EVALUATION_SERVICE_URL: str = "http://localhost:8005"
+    EVALUATE_ON_GENERATION: bool = True
+    EVALUATE_SYNC: bool = False
+    EVALUATION_TIMEOUT_SECONDS: int = 45
 
 
 @lru_cache(maxsize=1)

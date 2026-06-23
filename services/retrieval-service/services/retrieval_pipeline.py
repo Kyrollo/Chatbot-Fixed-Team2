@@ -81,6 +81,13 @@ class RetrievalPipeline:
 
             # Stage 3: Execute retrievers in parallel
             tasks, labels = [], []
+            graph_diagnostics = {
+                "enabled": routing.use_graph,
+                "matched_entities": 0,
+                "matched_chunk_ids": 0,
+                "returned_chunks": 0,
+                "skip_reason": None if routing.use_graph else "graph_disabled_by_router",
+            }
 
             async def timed_search(label, search_coro):
                 import time
@@ -98,7 +105,9 @@ class RetrievalPipeline:
                 tasks.append(timed_search("bm25", self._bm25.search(request.query, request.domain_id, top_k_retrieve)))
                 labels.append("bm25")
             if routing.use_graph:
-                tasks.append(timed_search("graph", self._graph.search(request.query, request.domain_id, top_k_retrieve)))
+                tasks.append(
+                    timed_search("graph", self._graph.search_with_diagnostics(request.query, request.domain_id, top_k_retrieve))
+                )
                 labels.append("graph")
 
             results_per_engine = await asyncio.gather(*tasks, return_exceptions=True)
@@ -107,8 +116,14 @@ class RetrievalPipeline:
             for label, result in zip(labels, results_per_engine):
                 if isinstance(result, Exception):
                     logger.error("Engine '%s' raised: %s", label, result)
+                    if label == "graph":
+                        graph_diagnostics["skip_reason"] = "graph_execution_failed"
                 else:
-                    active_result_lists.append(result)
+                    if label == "graph":
+                        graph_results, graph_diagnostics = result
+                        active_result_lists.append(graph_results)
+                    else:
+                        active_result_lists.append(result)
 
             # Stage 4: Fuse (RRF, with table-query boosting applied inside fuse_results)
             if not active_result_lists:
@@ -162,8 +177,27 @@ class RetrievalPipeline:
             )
 
             # Stage 7: Return
-            return RetrievalResponse(results=reranked, cache_hit=False)
+            return RetrievalResponse(
+                results=reranked,
+                cache_hit=False,
+                diagnostics={
+                    "router": {
+                        "vector": routing.use_vector,
+                        "bm25": routing.use_bm25,
+                        "graph": routing.use_graph,
+                        "decided_by": routing.decided_by,
+                    },
+                    "graph": graph_diagnostics,
+                },
+            )
 
         except Exception:
             logger.exception("RetrievalPipeline.run() uncaught exception")
-            return RetrievalResponse(results=[], cache_hit=False)
+            return RetrievalResponse(
+                results=[],
+                cache_hit=False,
+                diagnostics={
+                    "router": {"vector": True, "bm25": True, "graph": False, "decided_by": "pipeline_error"},
+                    "graph": {"enabled": False, "matched_entities": 0, "matched_chunk_ids": 0, "returned_chunks": 0, "skip_reason": "pipeline_error"},
+                },
+            )

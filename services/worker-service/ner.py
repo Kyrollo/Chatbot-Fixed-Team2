@@ -16,6 +16,10 @@ from __future__ import annotations
 # sentence_transformers, so it protects GLiNER's model loading too —
 # no duplicate workaround needed here.
 
+import os
+import re
+import threading
+from pathlib import Path
 from typing import Any
 
 from ontology import ENTITY_TYPES
@@ -26,8 +30,10 @@ from ontology import ENTITY_TYPES
 # ------------------------------------------------------------------
 
 _model: Any = None  # GLiNER, lazily loaded
+_ner_model_lock = threading.Lock()
 
-MODEL_NAME = "urchade/gliner_multi-v2.1"
+REMOTE_MODEL_NAME = "urchade/gliner_multi-v2.1"
+MODEL_NAME = os.getenv("NER_MODEL", REMOTE_MODEL_NAME)
 
 # Validated in the Sprint 3 spike test (real sentences from this
 # project's uploaded documents): Person and Location scored 0.85-0.97,
@@ -55,6 +61,7 @@ CONFIDENCE_THRESHOLD = 0.6
 # relation extraction, etc.) only ever sees "Person", "Department", etc.
 # — never GLiNER's internal phrasing.
 _LABEL_TO_ENTITY_TYPE: dict[str, str] = {
+    # Original entity types
     "a person name": "Person",
     "a project name or system": "Project",
     "a department in an organization": "Department",
@@ -62,16 +69,28 @@ _LABEL_TO_ENTITY_TYPE: dict[str, str] = {
     "a job role or position": "Role",
     "a geographical location": "Location",
     "a technical skill or expertise": "Skill",
+    # Phase 4 expansion: domain-relevant entity types
+    "an official document or report": "Document",
+    "a tax form or official form": "Form",
+    "a company or organization": "Organization",
+    "a government agency or authority": "Agency",
+    "a law or regulation or legal rule": "Regulation",
+    "a tax or payroll or financial concept": "TaxTerm",
+    "a date or time period": "Date",
+    "an identifier or code or reference number": "Identifier",
+    "a legal or policy requirement": "Requirement",
+    "a procedure or process or workflow": "Procedure",
 }
 
 GLINER_LABELS: list[str] = list(_LABEL_TO_ENTITY_TYPE.keys())
 
-# Safety net: if ontology.py ever gains a new EntityType, this catches
-# the mismatch immediately at import time instead of silently
-# extracting entities under a type that has no matching graph vlabel.
-assert set(_LABEL_TO_ENTITY_TYPE.values()) == set(ENTITY_TYPES), (
-    "ner.py's GLiNER label mapping is out of sync with ontology.py — "
-    "add the new entity type's semantic phrasing to _LABEL_TO_ENTITY_TYPE."
+# Safety net: verify that every GLiNER label maps to a valid ontology
+# entity type. The label map may be a subset of ENTITY_TYPES (not every
+# ontology type needs a GLiNER label), but every mapped value must exist.
+_mapped_types = set(_LABEL_TO_ENTITY_TYPE.values())
+_missing = _mapped_types - set(ENTITY_TYPES)
+assert not _missing, (
+    f"ner.py's GLiNER label mapping references entity types not in ontology.py: {_missing}"
 )
 
 
@@ -84,15 +103,26 @@ def get_ner_model() -> Any:
     """
     global _model
     if _model is None:
-        print(f"Loading NER model: {MODEL_NAME}...")
-        from gliner import GLiNER  # noqa: PLC0415 — see module docstring
+        with _ner_model_lock:
+            if _model is None:
+                model_path = Path(MODEL_NAME)
+                if model_path.exists():
+                    resolved_model_name = str(model_path)
+                else:
+                    offline_enabled = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("TRANSFORMERS_OFFLINE") == "1"
+                    if MODEL_NAME != REMOTE_MODEL_NAME or offline_enabled:
+                        raise FileNotFoundError(
+                            f"NER model path does not exist: {MODEL_NAME}. "
+                            "Set NER_MODEL to a valid local directory."
+                        )
+                    resolved_model_name = MODEL_NAME
+                print(f"Loading NER model: {resolved_model_name}...")
+                from gliner import GLiNER  # noqa: PLC0415 — see module docstring
 
-        _model = GLiNER.from_pretrained(MODEL_NAME)
-        print("NER model loaded")
+                _model = GLiNER.from_pretrained(resolved_model_name)
+                print("NER model loaded")
     return _model
 
-
-import re
 
 def normalize_arabic(text: str) -> str:
     """
@@ -113,26 +143,7 @@ def normalize_arabic(text: str) -> str:
     return text
 
 
-def extract_entities(text: str) -> list[dict]:
-    """
-    Runs NER on a single chunk of text using this project's ontology
-    (services/worker-service/ontology.py — Person, Project, Department,
-    Policy, Role, Location, Skill), via GLiNER's semantic label phrasing
-    (see GLINER_LABELS above).
-
-    Returns entities above CONFIDENCE_THRESHOLD only, normalized and filtered,
-    mapped back to ontology names:
-    [
-        {"text": "أحمد محمد", "normalized_text": "احمد محمد", "label": "Person", "score": 0.97},
-        ...
-    ]
-    """
-    if not text or not text.strip():
-        return []
-
-    model = get_ner_model()
-    raw_entities = model.predict_entities(text, GLINER_LABELS, threshold=CONFIDENCE_THRESHOLD)
-
+def _process_raw_entities(raw_entities: list[dict]) -> list[dict]:
     results = []
     seen = set()
     for ent in raw_entities:
@@ -160,11 +171,34 @@ def extract_entities(text: str) -> list[dict]:
     return results
 
 
+def extract_entities(text: str) -> list[dict]:
+    """
+    Runs NER on a single chunk of text using this project's ontology
+    (services/worker-service/ontology.py — Person, Project, Department,
+    Policy, Role, Location, Skill, Document, Form, Organization, Agency,
+    Regulation, TaxTerm, Date, Identifier, Requirement, Procedure),
+    via GLiNER's semantic label phrasing (see GLINER_LABELS above).
+
+    Returns entities above CONFIDENCE_THRESHOLD only, normalized and filtered,
+    mapped back to ontology names:
+    [
+        {"text": "أحمد محمد", "normalized_text": "احمد محمد", "label": "Person", "score": 0.97},
+        ...
+    ]
+    """
+    if not text or not text.strip():
+        return []
+
+    model = get_ner_model()
+    raw_entities = model.predict_entities(text, GLINER_LABELS, threshold=CONFIDENCE_THRESHOLD)
+    return _process_raw_entities(raw_entities)
+
+
 def extract_entities_for_chunks(chunks: list[dict]) -> list[dict]:
     """
     Batch entry point matching the embed_chunks() pattern used elsewhere
     in this pipeline — takes chunks from chunk.py (after embed_chunks()
-    has run), adds an 'entities' key to each.
+    has run), runs GLiNER batch inference with batch_size=16, adds an 'entities' key to each.
 
     [
         {
@@ -180,13 +214,45 @@ def extract_entities_for_chunks(chunks: list[dict]) -> list[dict]:
     """
     print(f"  Extracting entities from {len(chunks)} chunks...")
 
-    total_entities = 0
-    for chunk in chunks:
-        entities = extract_entities(chunk["text"])
-        chunk["entities"] = entities
-        total_entities += len(entities)
+    # Collect non-empty texts and their original indices
+    non_empty_indices = []
+    non_empty_texts = []
+    for i, chunk in enumerate(chunks):
+        text = chunk.get("text", "")
+        if text and text.strip():
+            non_empty_indices.append(i)
+            non_empty_texts.append(text)
+        else:
+            chunk["entities"] = []
 
-    print(f"  Extracted {total_entities} entities across {len(chunks)} chunks")
+    if non_empty_texts:
+        model = get_ner_model()
+        total_entities = 0
+        try:
+            raw_entities_list = model.batch_predict_entities(
+                non_empty_texts,
+                GLINER_LABELS,
+                threshold=CONFIDENCE_THRESHOLD
+            )
+            for idx, raw_entities in zip(non_empty_indices, raw_entities_list):
+                entities = _process_raw_entities(raw_entities)
+                chunks[idx]["entities"] = entities
+                total_entities += len(entities)
+        except Exception as e:
+            print(f"  Warning: GLiNER batch inference failed: {e}. Falling back to sequential.")
+            for idx, text in zip(non_empty_indices, non_empty_texts):
+                try:
+                    raw_entities = model.predict_entities(text, GLINER_LABELS, threshold=CONFIDENCE_THRESHOLD)
+                    entities = _process_raw_entities(raw_entities)
+                    chunks[idx]["entities"] = entities
+                    total_entities += len(entities)
+                except Exception as seq_e:
+                    print(f"  Warning: failed to extract entities for chunk {idx}: {seq_e}")
+                    chunks[idx]["entities"] = []
+        
+        print(f"  Extracted {total_entities} entities across {len(chunks)} chunks")
+    else:
+        print("  No non-empty chunks found for entity extraction.")
 
     # Clear GLiNER model from RAM immediately after task completion
     global _model

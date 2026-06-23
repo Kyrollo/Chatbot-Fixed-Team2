@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     EVAL_LOOKBACK_MINUTES: int = 35
     EVAL_SAMPLE_RATE: float = 0.05
     MODERATION_THRESHOLD: float = 0.6
+    # When False: a judge LLM failure returns a 502 error instead of a mock
+    # score. Set to True only in local dev when no LLM is running.
+    ALLOW_MOCK_JUDGE: bool = False
 
     # ── RAGAS ────────────────────────────────────────────────────────────────
     RAGAS_JUDGE_MODEL: str = "groq/llama-3.3-70b-versatile"

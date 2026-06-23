@@ -1,10 +1,8 @@
 // src/components/layout/Sidebar.tsx
 import { NavLink } from 'react-router-dom'
-import { MessageSquare, Database, FileUp, ShieldCheck, Activity, ChevronLeft, ChevronRight } from 'lucide-react'
+import { MessageSquare, Database, FileUp, ShieldCheck, Activity, ChevronLeft, ChevronRight, BarChart2, FileText } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { cn } from '../../lib/utils'
-
-import { BarChart2 } from 'lucide-react'  // already imported if you have it
 
 interface NavItem {
   to: string
@@ -19,10 +17,8 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/documents', label: 'Documents', icon: <FileUp size={22} />, roles: ['system_admin', 'domain_admin', 'contributor'] },
   { to: '/admin', label: 'Admin', icon: <ShieldCheck size={22} />, roles: ['system_admin'] },
   { to: '/monitoring', label: 'Monitoring', icon: <Activity size={22} />, roles: ['system_admin'] },
-  
-  // ADD this item to the NAV_ITEMS array, after the monitoring item:
   { to: '/quality', label: 'Quality', icon: <BarChart2 size={22} />, roles: ['system_admin'] },
- 
+  { to: '/logs', label: 'Logs', icon: <FileText size={22} />, roles: ['system_admin'] },
 ]
 
 export default function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {

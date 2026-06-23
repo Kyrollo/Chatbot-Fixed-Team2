@@ -3,8 +3,8 @@
 // Shows: Judge LLM scores, audit log, moderation queue
 
 import { useEffect, useState } from 'react'
-import { BarChart2, ShieldAlert, RefreshCw, CheckCircle, XCircle, Clock, Activity } from 'lucide-react'
-import { api } from '../lib/api'
+import { BarChart2, ShieldAlert, RefreshCw, CheckCircle, XCircle, Clock, Activity, Download, Trash2 } from 'lucide-react'
+import { api, qualityApi } from '../lib/api'
 import { useAuthStore } from '../store/authStore'
 import { cn } from '../lib/utils'
 
@@ -114,6 +114,38 @@ export default function QualityPage() {
     }
   }
 
+  function exportQualityData() {
+    const data = {
+      evaluationLogs: evalLogs,
+      moderationQueue: modItems,
+      auditLogs: auditLogs,
+      exportedAt: new Date().toISOString(),
+    }
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `quality_data_${new Date().toISOString().slice(0, 10)}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  async function resetQualityData() {
+    if (!window.confirm("Are you sure you want to reset all quality and logs data? This will clear all evaluation logs, moderation queue items, and audit trail logs, and reset evaluation cursor sequence.")) return
+    setLoading(true)
+    try {
+      await qualityApi.reset()
+      alert("Quality data and logs reset successfully.")
+      await fetchAll()
+    } catch (err: any) {
+      alert(`Reset failed: ${err.message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function submitDecision(itemId: string, decision: 'approved' | 'rejected') {
     try {
       await api.post(`/moderation/${itemId}/decide`, {
@@ -162,12 +194,30 @@ export default function QualityPage() {
             Judge LLM scores, moderation queue, and audit trail.
           </p>
         </div>
-        <button
-          onClick={fetchAll}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-card/50 hover:bg-card text-xs transition"
-        >
-          <RefreshCw size={14} className={cn(loading && 'animate-spin')} /> Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {isSystemAdmin && (evalLogs.length > 0 || modItems.length > 0 || auditLogs.length > 0) && (
+            <button
+              onClick={exportQualityData}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-card/50 hover:bg-card text-xs transition text-muted-foreground hover:text-foreground"
+            >
+              <Download size={14} /> Export Quality Data
+            </button>
+          )}
+          {isSystemAdmin && (
+            <button
+              onClick={resetQualityData}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/20 bg-red-500/5 hover:bg-red-500/15 text-xs transition text-red-400 font-semibold"
+            >
+              <Trash2 size={14} /> Reset Quality Data
+            </button>
+          )}
+          <button
+            onClick={fetchAll}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-card/50 hover:bg-card text-xs transition"
+          >
+            <RefreshCw size={14} className={cn(loading && 'animate-spin')} /> Refresh
+          </button>
+        </div>
       </div>
 
       {/* Non-admin guard */}

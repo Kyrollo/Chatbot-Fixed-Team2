@@ -70,19 +70,19 @@ def run_sql_on_db(url: str, sql_content: str, label: str):
                 
                 conn.execute(text(stmt))
                 executed_count += 1
-            print(f"  {label} migration complete ({executed_count} statements executed).")
+            print(f"  {label} cleared successfully ({executed_count} statements executed).")
     except Exception as e:
         print(f"  Skipping {label} database or handled error: {e}")
         if label == "Relational":
             sys.exit(1)
 
 if __name__ == "__main__":
-    setup_sql_path = ROOT / "migrations" / "setup_all.sql"
-    if not setup_sql_path.exists():
-        print(f"Error: {setup_sql_path} does not exist.")
+    sql_path = ROOT / "migrations" / "clear_db.sql"
+    if not sql_path.exists():
+        print(f"Error: {sql_path} does not exist.")
         sys.exit(1)
         
-    sql_content = setup_sql_path.read_text(encoding="utf-8")
+    sql_content = sql_path.read_text(encoding="utf-8")
     
     # 1. Main Relational DB
     rel_url = os.getenv("SYNC_DATABASE_URL") or os.getenv("DATABASE_URL")

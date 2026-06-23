@@ -12,19 +12,22 @@ the same prompt. The function wrapper exists so evaluate_batch.py can call
 the judge without instantiating or managing an async HTTP client — it just
 calls evaluate_answer(query=, answer=, context=) and gets a dict back.
 
-FIX: The original judge.py only had JudgeService. evaluate_batch.py imports
-`from judge import evaluate_answer` (a module-level function), so the service
-would crash at the first batch run with ImportError. This version adds that
-function using a shared synchronous httpx call so it works from Celery tasks
-(which are sync by default in Celery 5).
+ALLOW_MOCK_JUDGE (config setting):
+  - False (default): LLM failures raise exceptions rather than returning
+    fake scores. This makes failures visible in logs and dashboards.
+  - True: falls back to a deterministic mock score when the LLM is offline.
+    Set to True in dev environments where no LLM is configured.
 """
 import json
+import logging
 import asyncio
 
 import httpx
 
 from config import settings
 from schemas import EvaluationRequest, EvaluationResponse
+
+logger = logging.getLogger(__name__)
 
 
 # ── Shared routing logic ────────────────────────────────────────────────────
@@ -52,7 +55,7 @@ def _build_payload(query: str, answer: str, context: str | None) -> dict:
         '  {"faithfulness": <float>, "relevance": <float>, "completeness": <float>, "explanation": "<string>"}\n\n'
         f"Query:\n{query}\n\nAnswer:\n{answer}\n\nContext:\n{context_text}"
     )
-    route_label, _, model, _ = _route()
+    _, _, model, _ = _route()
     return {
         "model": model,
         "messages": [
@@ -66,6 +69,27 @@ def _build_payload(query: str, answer: str, context: str | None) -> dict:
         "max_tokens": 300,
         "response_format": {"type": "json_object"},
     }
+
+
+# ── Judge health check ────────────────────────────────────────────────────
+
+async def check_judge_health() -> dict:
+    """
+    Probes the configured LLM endpoint to verify connectivity.
+    Returns a dict with keys: reachable (bool), route (str), model (str), error (str|None).
+    Used by GET /evaluate/judge-health.
+    """
+    route_label, base_url, model, headers = _route()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
+            resp = await client.get(
+                base_url.replace("/openai/v1", "") + "/models" if route_label == "local" else base_url + "/models",
+                headers=headers,
+            )
+            reachable = resp.status_code < 500
+    except Exception as exc:
+        return {"reachable": False, "route": route_label, "model": model, "error": str(exc)}
+    return {"reachable": reachable, "route": route_label, "model": model, "error": None}
 
 
 # ── Sync function for Celery tasks ──────────────────────────────────────────
@@ -82,25 +106,34 @@ def evaluate_answer(query: str, answer: str, context: str | None = None) -> dict
             "raw_response":  "<full LLM JSON string>",
         }
 
-    `context` will be None for every row coming from the batch job
-    (rag_query_logs has no context column). The prompt treats None as
-    "No context provided" and the LLM scores faithfulness as best it can
-    from the answer alone — scores will be weaker than if real context
-    were available, but will not error.
+    Raises RuntimeError if the LLM call fails and ALLOW_MOCK_JUDGE is False.
     """
     route_label, base_url, model, headers = _route()
     payload = _build_payload(query, answer, context)
 
-    with httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
-        response = client.post(
-            f"{base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-        )
-        response.raise_for_status()
-
-    raw = response.json()["choices"][0]["message"]["content"]
-    parsed = json.loads(raw)
+    try:
+        with httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+            response = client.post(
+                f"{base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+        raw = response.json()["choices"][0]["message"]["content"]
+        parsed = json.loads(raw)
+    except Exception as exc:
+        if settings.ALLOW_MOCK_JUDGE:
+            logger.warning("Judge LLM call failed (ALLOW_MOCK_JUDGE=True — returning mock): %s", exc)
+            parsed = {
+                "faithfulness": 0.85,
+                "relevance": 0.90,
+                "completeness": 0.80,
+                "explanation": f"Mock evaluation (judge offline: {exc}).",
+            }
+            raw = json.dumps(parsed)
+        else:
+            logger.error("Judge LLM call failed (ALLOW_MOCK_JUDGE=False — raising): %s", exc)
+            raise RuntimeError(f"Judge LLM call failed: {exc}") from exc
 
     return {
         "faithfulness":  max(0.0, min(1.0, float(parsed.get("faithfulness", 0.0)))),
@@ -122,16 +155,34 @@ class JudgeService:
         route_used, base_url, model, headers = _route()
         context = "\n\n".join(request.context_chunks[:5]) or "No context provided."
         payload = _build_payload(request.query, request.answer, context)
-        payload["model"] = model  # override in case _build_payload used a cached value
+        payload["model"] = model
 
-        response = await self._client.post(
-            f"{base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-        )
-        response.raise_for_status()
-        raw = response.json()["choices"][0]["message"]["content"]
-        parsed = json.loads(raw)
+        try:
+            response = await self._client.post(
+                f"{base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            raw = response.json()["choices"][0]["message"]["content"]
+            parsed = json.loads(raw)
+        except Exception as exc:
+            if settings.ALLOW_MOCK_JUDGE:
+                logger.warning(
+                    "Judge LLM call failed (ALLOW_MOCK_JUDGE=True — returning mock): %s", exc
+                )
+                parsed = {
+                    "score": 0.88,
+                    "explanation": f"Mock evaluation (judge offline: {exc}).",
+                }
+                route_used = "mock-fallback"
+                model = "mock-model"
+            else:
+                logger.error(
+                    "Judge LLM call failed (ALLOW_MOCK_JUDGE=False): route=%s model=%s error=%s",
+                    route_used, model, exc,
+                )
+                raise RuntimeError(f"Judge LLM unavailable: {exc}") from exc
 
         return EvaluationResponse(
             score=max(0.0, min(1.0, float(parsed.get("relevance", parsed.get("score", 0.0))))),

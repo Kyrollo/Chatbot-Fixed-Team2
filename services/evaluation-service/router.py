@@ -1,26 +1,12 @@
 """
 router.py
 ----------
-The live POST /evaluate endpoint.
+The live POST /evaluate endpoint plus supporting endpoints.
 
-FIX 1 — retrieved context persistence
-    After a successful evaluation, the request's context_chunks (and
-    optionally a reference answer) are saved via
-    db.queries.save_live_evaluation_cache() — keyed by SHA-256(query+answer)
-    — so evaluate_batch.py can recover them later when it samples that row
-    from rag_query_logs.
-
-    This save is wrapped in its own try/except and NEVER affects the live
-    response returned to the caller. If the DB write fails for any reason,
-    /evaluate still returns its score normally — it just means this call's
-    context won't be recoverable by the batch job (same as before this fix).
-
-FIX — metrics now recorded
-    eval_score_gauge and eval_latency were defined in metrics.py but never
-    observed anywhere. This is the natural place to record both: it is the
-    single site that times the judge call and receives its score.
-    Recorded with judge="custom_judge" so both judges' series land on the
-    same two Prometheus metrics with different label values.
+/evaluate/health          — service liveness check
+/evaluate/judge-health    — probe the LLM judge for reachability (Phase 7)
+/evaluate                 — score a (query, answer, context) triple
+/evaluate/logs            — recent evaluation logs
 """
 import logging
 import time
@@ -28,7 +14,7 @@ import time
 from fastapi import APIRouter, HTTPException, status
 
 from config import settings
-from judge import JudgeService
+from judge import JudgeService, check_judge_health
 from metrics import eval_score_gauge, eval_latency
 from schemas import EvaluationRequest, EvaluationResponse
 
@@ -43,20 +29,41 @@ async def health() -> dict:
     return {"status": "ok", "service": settings.SERVICE_NAME}
 
 
+@router.get("/judge-health")
+async def judge_health() -> dict:
+    """
+    Probes the configured LLM judge (Groq or Ollama) for connectivity.
+    Returns:
+      { "reachable": bool, "route": "api"|"local", "model": str, "error": str|None }
+
+    Use this to verify the judge is available before triggering evaluations,
+    or to diagnose why /evaluate is returning errors (ALLOW_MOCK_JUDGE=False)
+    or mock scores (ALLOW_MOCK_JUDGE=True).
+    """
+    result = await check_judge_health()
+    return {
+        **result,
+        "allow_mock_judge": settings.ALLOW_MOCK_JUDGE,
+    }
+
+
 @router.post("", response_model=EvaluationResponse)
 async def evaluate(payload: EvaluationRequest) -> EvaluationResponse:
     start = time.perf_counter()
     try:
         result = await _judge.evaluate(payload)
+    except RuntimeError as exc:
+        # Judge unavailable and ALLOW_MOCK_JUDGE=False — surface it clearly
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Judge LLM unavailable: {exc}. Check /evaluate/judge-health.",
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Evaluation failed: {exc}",
         ) from exc
     finally:
-        # Recorded in finally so latency is captured even on failure —
-        # a slow failing call is exactly what you want visible in the
-        # histogram, not hidden by an early return.
         eval_latency.labels(judge="custom_judge").observe(
             time.perf_counter() - start
         )
@@ -64,11 +71,17 @@ async def evaluate(payload: EvaluationRequest) -> EvaluationResponse:
     # Score is only meaningful on success — outside the finally block.
     eval_score_gauge.labels(judge="custom_judge").set(result.score)
 
-    # FIX 1: persist context_chunks so evaluate_batch.py can recover
-    # them for this (query, answer) pair. Best-effort — never breaks
-    # the response already computed above.
+    # Persist context_chunks so evaluate_batch.py can recover them for
+    # this (query, answer) pair. Best-effort — never breaks the response.
     try:
-        from db.queries import save_live_evaluation_cache, ensure_tables_exist, log_audit_event
+        from db.queries import (
+            save_live_evaluation_cache,
+            ensure_tables_exist,
+            log_audit_event,
+            save_evaluation_result,
+            flag_for_moderation,
+            MODERATION_THRESHOLD,
+        )
 
         ensure_tables_exist()
         save_live_evaluation_cache(
@@ -77,17 +90,39 @@ async def evaluate(payload: EvaluationRequest) -> EvaluationResponse:
             context_chunks=payload.context_chunks,
             reference=getattr(payload, "reference", None),
         )
-        
-        # Log to audit_logs
+
         log_audit_event(
             event_type="live_evaluation",
             actor=None,
-            query_id=None,
-            details={"score": result.score, "model": getattr(result, "model", None) or "custom_judge"}
+            query_id=payload.query_id,
+            details={
+                "score": result.score,
+                "model": result.model,
+                "route": result.route_used,
+            },
         )
+
+        if payload.query_id:
+            # Save the live evaluation result directly to evaluation_logs
+            log_id = save_evaluation_result(
+                query_id=payload.query_id,
+                model_used="custom_judge",
+                faithfulness_score=None,
+                relevance_score=result.score,
+                completeness_score=None,
+                overall_score=result.score,
+                raw_judge_response=result.explanation,
+            )
+
+            # Flag for moderation if the score is below the threshold
+            if log_id and result.score < MODERATION_THRESHOLD:
+                flag_for_moderation(
+                    query_id=payload.query_id,
+                    evaluation_log_id=log_id,
+                )
     except Exception as exc:
         logger.warning(
-            "Could not cache context or log audit for evaluation "
+            "Could not cache context, persist evaluation or log audit for evaluation "
             "(live /evaluate response is unaffected): %s",
             exc,
         )
@@ -97,13 +132,22 @@ async def evaluate(payload: EvaluationRequest) -> EvaluationResponse:
 
 @router.get("/logs")
 async def get_eval_logs():
-    """
-    Returns recent evaluation logs.
-    """
+    """Returns recent evaluation logs."""
     try:
         from db.queries import list_evaluation_logs
         logs = list_evaluation_logs()
         return {"logs": logs}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/reset")
+async def reset_eval_data():
+    """Clears all logs and moderation data in the evaluation DB."""
+    try:
+        from db.queries import reset_evaluation_data
+        reset_evaluation_data()
+        return {"status": "ok", "message": "Evaluation and logs reset successfully"}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 

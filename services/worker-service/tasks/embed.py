@@ -10,6 +10,8 @@ from __future__ import annotations
 # services are also booting, causing [WinError 1455] and cascading
 # MemoryErrors. The import is deferred until the first document arrives.
 
+import os
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -21,12 +23,29 @@ import numpy as np
 # ------------------------------------------------------------------
 
 _model: Any = None  # SentenceTransformer, lazily loaded
+import threading
+_model_lock = threading.Lock()
 
 EMBEDDING_DIM = 384
 BATCH_SIZE    = 32
 
 
-MODEL_NAME = "intfloat/multilingual-e5-small"
+REMOTE_MODEL_NAME = "intfloat/multilingual-e5-small"
+MODEL_NAME = os.getenv("WORKER_EMBEDDING_MODEL") or os.getenv("EMBEDDING_MODEL") or REMOTE_MODEL_NAME
+
+
+def _resolve_model_name() -> str:
+    model_name = MODEL_NAME
+    model_path = Path(model_name)
+    if model_path.exists():
+        return str(model_path)
+    offline_enabled = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("TRANSFORMERS_OFFLINE") == "1"
+    if model_name != REMOTE_MODEL_NAME or offline_enabled:
+        raise FileNotFoundError(
+            f"Worker embedding model path does not exist: {model_name}. "
+            "Set WORKER_EMBEDDING_MODEL or EMBEDDING_MODEL to a valid local directory."
+        )
+    return model_name
 
 
 def get_model() -> Any:
@@ -69,18 +88,21 @@ def get_model() -> Any:
     """
     global _model
     if _model is None:
-        print(f"Loading {MODEL_NAME} model...")
-        # Lazy imports — torch loads here, not at Celery startup.
-        from sentence_transformers import SentenceTransformer          # noqa: PLC0415
-        from sentence_transformers import models as st_models          # noqa: PLC0415
+        with _model_lock:
+            if _model is None:
+                resolved_model_name = _resolve_model_name()
+                print(f"Loading embedding model: {resolved_model_name}...")
+                # Lazy imports — torch loads here, not at Celery startup.
+                from sentence_transformers import SentenceTransformer          # noqa: PLC0415
+                from sentence_transformers import models as st_models          # noqa: PLC0415
 
-        transformer = st_models.Transformer(MODEL_NAME)
-        pooling = st_models.Pooling(
-            transformer.get_word_embedding_dimension(),
-            pooling_mode_mean_tokens=True,
-        )
-        _model = SentenceTransformer(modules=[transformer, pooling])
-        print("Model loaded")
+                transformer = st_models.Transformer(resolved_model_name)
+                pooling = st_models.Pooling(
+                    transformer.get_word_embedding_dimension(),
+                    pooling_mode_mean_tokens=True,
+                )
+                _model = SentenceTransformer(modules=[transformer, pooling])
+                print("Model loaded")
     return _model
 
 
@@ -93,31 +115,40 @@ def embed_chunks(chunks: list[dict]) -> list[dict]:
     - Queries   at query time  → "query: "   + text
     Both must use the same model for vectors to be in the same space.
 
-    Returns the same list of chunks with 'embedding' added:
-    [
-        {
-            "chunk_id":  "...",
-            "text":      "...",
-            "embedding": [0.12, -0.34, ...],   ← 384 floats
-            ...
-        }
-    ]
+    Returns the same list of chunks with 'embedding' added.
     """
-    model = get_model()
-    texts = [f"passage: {chunk['text']}" for chunk in chunks]
+    if chunks:
+        model = get_model()
+        texts = [f"passage: {chunk['text']}" for chunk in chunks]
 
-    print(f"  Embedding {len(texts)} chunks in batches of {BATCH_SIZE}...")
+        print(f"  Embedding {len(texts)} chunks in batches of {BATCH_SIZE}...")
 
-    embeddings = model.encode(
-        texts,
-        batch_size=BATCH_SIZE,
-        show_progress_bar=True,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-    )
+        embeddings = model.encode(
+            texts,
+            batch_size=BATCH_SIZE,
+            show_progress_bar=True,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+        )
 
-    for chunk, embedding in zip(chunks, embeddings):
-        chunk["embedding"] = embedding.tolist()
+        for chunk, embedding in zip(chunks, embeddings):
+            chunk["embedding"] = embedding.tolist()
+    else:
+        print("  No chunks to embed")
 
     print(f"  Embedded {len(chunks)} chunks — dim={EMBEDDING_DIM}")
+
+    # Dynamic Model Offloading: unload model and trigger GC to save RAM
+    global _model
+    if _model is not None:
+        _model = None
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
     return chunks

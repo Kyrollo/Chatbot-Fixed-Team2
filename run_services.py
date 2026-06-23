@@ -84,11 +84,11 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
     out["QDRANT_PATH"] = str(ROOT / "data" / "qdrant")
     out.pop("QDRANT_URL", None)
 
-    out["DOMAIN_SERVICE_URL"]     = "http://localhost:8001"
-    out["INGESTION_SERVICE_URL"]  = "http://localhost:8002"
-    out["RETRIEVAL_SERVICE_URL"]  = "http://localhost:8003"
-    out["GENERATION_SERVICE_URL"] = "http://localhost:8004"
-    out["EVALUATION_SERVICE_URL"] = "http://localhost:8005"
+    out["DOMAIN_SERVICE_URL"]     = "http://localhost:8000"
+    out["INGESTION_SERVICE_URL"]  = "http://localhost:8000"
+    out["RETRIEVAL_SERVICE_URL"]  = "http://localhost:8000"
+    out["GENERATION_SERVICE_URL"] = "http://localhost:8000"
+    out["EVALUATION_SERVICE_URL"] = "http://localhost:8000"
     out["OCR_SERVICE_URL"]        = "http://localhost:8006"
     out["UPLOAD_DIR"]             = str(ROOT / "data" / "uploads")
     out.setdefault("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -108,11 +108,14 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
         out["KEYCLOAK_REALM_URL"]  = DEV_ISSUER
         out["KEYCLOAK_PUBLIC_KEY"] = get_public_key_body()
 
+    num_threads = str(max(2, os.cpu_count() // 2))
     out.setdefault("INTERNAL_API_KEY",    "rag-internal-dev-key-change-in-prod")
-    out.setdefault("OPENBLAS_NUM_THREADS", "1")
-    out.setdefault("OMP_NUM_THREADS",      "1")
-    out.setdefault("MKL_NUM_THREADS",      "1")
-    out.setdefault("NUMEXPR_NUM_THREADS",  "1")
+    out.setdefault("OPENBLAS_NUM_THREADS", num_threads)
+    out.setdefault("OMP_NUM_THREADS",      num_threads)
+    out.setdefault("MKL_NUM_THREADS",      num_threads)
+    out.setdefault("NUMEXPR_NUM_THREADS",  num_threads)
+    # Prevent duplicate OpenMP library loading from crashing the application on Windows
+    out.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
     # Prevent PyTorch from probing/loading CUDA DLLs — saves ~200 MB per process.
     out.setdefault("CUDA_VISIBLE_DEVICES", "")
     out.setdefault("PYTORCH_JIT",          "0")
@@ -124,15 +127,14 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
     # to avoid failing downloads from blocked or unreliable Hugging Face / AI Studio endpoints.
     out.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
     out.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+    # Enforce Hugging Face offline mode to prevent any online network checks.
+    out.setdefault("HF_HUB_OFFLINE", "1")
+    out.setdefault("TRANSFORMERS_OFFLINE", "1")
     return out
 
 
 API_SERVICES = [
-    {"name": "domain-service",     "dir": ROOT / "services" / "domain-service",     "port": 8001, "app": "main:app"},
-    {"name": "ingestion-service",  "dir": ROOT / "services" / "ingestion-service",  "port": 8002, "app": "main:app"},
-    {"name": "retrieval-service",  "dir": ROOT / "services" / "retrieval-service",  "port": 8003, "app": "main:app"},
-    {"name": "generation-service", "dir": ROOT / "services" / "generation-service", "port": 8004, "app": "main:app"},
-    # ocr-service runs embedded inside worker-service (not a standalone process)
+    {"name": "monolith-service", "dir": ROOT / "services" / "monolith", "port": 8000, "app": "main:app"},
 ]
 
 EVALUATION_SERVICE = {
@@ -149,6 +151,7 @@ def worker_cmd() -> list[str]:
     cmd = [
         PYTHON, "-m", "celery", "-A", "worker", "worker",
         "--loglevel=info", "-Q", "ingestion", "--concurrency=1",
+        "-n", "ingestion-worker",
     ]
     if os.name == "nt":
         cmd.extend(["--pool=solo"])
@@ -194,6 +197,7 @@ def evaluation_worker_cmd() -> list[str]:
     cmd = [
         PYTHON, "-m", "celery", "-A", "celery_app", "worker",
         "--loglevel=info", "-Q", "evaluation", "--concurrency=1",
+        "-n", "evaluation-worker",
     ]
     if os.name == "nt":
         cmd.extend(["--pool=solo"])
@@ -270,6 +274,9 @@ def main() -> int:
     parser.add_argument("--no-reload",  action="store_true", help="Disable uvicorn --reload")
     parser.add_argument("--skip-infra", action="store_true", help="Skip starting Redis/Keycloak")
     args = parser.parse_args()
+    # Always run ingestion worker and evaluation services by default
+    args.worker = True
+    args.evaluation = True
     ensure_python_runtime()
 
     infra_processes: list[tuple[str, subprocess.Popen]] = []
@@ -292,10 +299,18 @@ def main() -> int:
         use_keycloak = keycloak_ready()
         use_redis    = redis_ping()
 
+    if use_redis:
+        try:
+            import redis as redis_lib
+            r = redis_lib.Redis(host="localhost", port=6379, db=0, socket_timeout=5)
+            r.flushdb()
+            print("  Redis database 0 flushed successfully")
+            r.close()
+        except Exception as exc:
+            print(f"  Warning: could not flush Redis: {exc}")
+
     env      = load_root_env(use_keycloak=use_keycloak, use_redis=use_redis)
     services = list(API_SERVICES)
-    if args.evaluation:
-        services.append(EVALUATION_SERVICE)
 
     print(f"\n[2/3] Configuration")
     print(f"  Python:     {PYTHON}")

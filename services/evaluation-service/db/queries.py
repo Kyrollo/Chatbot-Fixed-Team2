@@ -632,3 +632,32 @@ def list_evaluation_logs(limit: int = 50) -> list[dict]:
     finally:
         session.close()
 
+
+def reset_evaluation_data() -> None:
+    """
+    Clears all evaluation logs, moderation queue items, audit events, and
+    live evaluation caches, and resets the batch processing cursor to 0.
+    """
+    session = SessionLocal()
+    try:
+        session.query(ModerationQueueItem).delete()
+        session.query(EvaluationLog).delete()
+        session.query(LiveEvaluationCache).delete()
+        session.query(AuditLog).delete()
+        
+        # Reset the default cursor
+        cursor = session.query(EvalCursor).filter(EvalCursor.name == _CURSOR_NAME).first()
+        if cursor:
+            cursor.last_query_id = 0
+            cursor.updated_at = datetime.now(timezone.utc)
+        else:
+            cursor = EvalCursor(name=_CURSOR_NAME, last_query_id=0, updated_at=datetime.now(timezone.utc))
+            session.add(cursor)
+            
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+

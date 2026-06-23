@@ -43,6 +43,7 @@ celery_app.conf.update(
         "tasks.evaluate_batch.evaluate_recent_answers": {"queue": "evaluation"},
     },
     broker_connection_retry_on_startup=True,
+    worker_max_tasks_per_child=1,      # recycle evaluation worker after each batch run to reclaim RAM
 )
 
 # ------------------------------------------------------------------

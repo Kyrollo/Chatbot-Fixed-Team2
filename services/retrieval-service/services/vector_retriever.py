@@ -17,7 +17,7 @@ class VectorRetriever(BaseRetriever):
 
     async def search(self, query: str, domain_id: str, top_k: int) -> list:
         try:
-            query_vector = self._embedder.embed_query(query)
+            query_vector = await self._embedder.embed_query(query)
             return await self._qdrant.search(
                 domain_id=domain_id,
                 query_vector=query_vector,

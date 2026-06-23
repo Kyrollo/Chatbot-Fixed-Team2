@@ -1,6 +1,6 @@
 // src/pages/MonitoringPage.tsx
 import { useEffect, useState } from 'react'
-import { Server, Database, Cpu, HardDrive, RefreshCw, BarChart2, ShieldAlert } from 'lucide-react'
+import { Server, Database, Cpu, HardDrive, RefreshCw, BarChart2, ShieldAlert, Download, Trash2 } from 'lucide-react'
 import { healthApi, monitoringApi } from '../lib/api'
 import { useAuthStore } from '../store/authStore'
 import { cn } from '../lib/utils'
@@ -69,6 +69,33 @@ export default function MonitoringPage() {
     }
   }
 
+  function exportMetrics() {
+    if (!metrics) return
+    const blob = new Blob([JSON.stringify(metrics, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `monitoring_metrics_${new Date().toISOString().slice(0, 10)}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  async function resetMetrics() {
+    if (!window.confirm("Are you sure you want to reset all monitoring metrics? This will clear Redis latency caches and LLM distributions.")) return
+    setMetricsLoading(true)
+    try {
+      await monitoringApi.reset()
+      alert("Metrics reset successfully.")
+      await fetchMetrics()
+    } catch (err: any) {
+      alert(`Reset failed: ${err.message}`)
+    } finally {
+      setMetricsLoading(false)
+    }
+  }
+
   useEffect(() => {
     checkHealth()
     const healthInterval = setInterval(checkHealth, 15000)
@@ -103,18 +130,36 @@ export default function MonitoringPage() {
             Real-time status of microservices, database, and system resource load.
           </p>
         </div>
-        <button
-          onClick={async () => {
-            checkHealth()
-            if (isSystemAdmin) {
-              setMetricsLoading(true)
-              await fetchMetrics().finally(() => setMetricsLoading(false))
-            }
-          }}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-card/50 hover:bg-card text-xs transition"
-        >
-          <RefreshCw size={14} className={cn(metricsLoading && 'animate-spin')} /> Manual Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {isSystemAdmin && metrics && (
+            <button
+              onClick={exportMetrics}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-card/50 hover:bg-card text-xs transition text-muted-foreground hover:text-foreground"
+            >
+              <Download size={14} /> Export Metrics
+            </button>
+          )}
+          {isSystemAdmin && (
+            <button
+              onClick={resetMetrics}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/20 bg-red-500/5 hover:bg-red-500/15 text-xs transition text-red-400 font-semibold"
+            >
+              <Trash2 size={14} /> Reset Metrics
+            </button>
+          )}
+          <button
+            onClick={async () => {
+              checkHealth()
+              if (isSystemAdmin) {
+                setMetricsLoading(true)
+                await fetchMetrics().finally(() => setMetricsLoading(false))
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-card/50 hover:bg-card text-xs transition"
+          >
+            <RefreshCw size={14} className={cn(metricsLoading && 'animate-spin')} /> Manual Refresh
+          </button>
+        </div>
       </div>
 
       {/* Basic Infrastructure Status */}

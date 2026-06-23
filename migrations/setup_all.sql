@@ -266,7 +266,9 @@ INSERT INTO users (id, name, role) VALUES
     ('652ec45e-1b68-478c-9bd3-81cc46fb24a9',    'System Admin User (UUID)',  'system_admin'),
     ('manager',                                  'Domain Manager User',       'domain_admin'),
     ('user',                                     'Regular Contributor User',  'contributor'),
+    ('a1111111-1111-1111-1111-111111111111',    'Regular Contributor (UUID)','contributor'),
     ('viewer',                                   'Read-Only Viewer',          'reader'),
+    ('d3794cbc-9bb9-4c06-95e5-33603c71b287',    'Read-Only Viewer (UUID)',   'reader'),
     ('unauth',                                   'Unauthorized Hacker',       'unauthorized')
 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role;
 
@@ -285,7 +287,9 @@ ON CONFLICT (id) DO UPDATE SET llm_route = EXCLUDED.llm_route, chunk_size = EXCL
 INSERT INTO domain_roles (id, domain_id, user_id, role, assigned_by, assigned_at) VALUES
     ('11111111-1111-1111-1111-111111111101', '11111111-1111-1111-1111-111111111111', 'manager', 'domain_admin', 'admin',   NOW()),
     ('11111111-1111-1111-1111-111111111102', '11111111-1111-1111-1111-111111111111', 'user',    'contributor',  'manager', NOW()),
-    ('22222222-2222-2222-2222-222222222201', '22222222-2222-2222-2222-222222222222', 'viewer',  'reader',       'admin',   NOW())
+    ('11111111-1111-1111-1111-111111111103', '11111111-1111-1111-1111-111111111111', 'a1111111-1111-1111-1111-111111111111', 'contributor',  'manager', NOW()),
+    ('22222222-2222-2222-2222-222222222201', '22222222-2222-2222-2222-222222222222', 'viewer',  'reader',       'admin',   NOW()),
+    ('22222222-2222-2222-2222-222222222202', '22222222-2222-2222-2222-222222222222', 'd3794cbc-9bb9-4c06-95e5-33603c71b287', 'reader',       'admin',   NOW())
 ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role;
 
 INSERT INTO documents (id, domain_id, user_id, filename, file_path, status, error_msg, created_at, updated_at) VALUES
@@ -314,3 +318,7 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO eval_cursor (name, last_query_id, updated_at) VALUES
     ('default', 0, NOW())
 ON CONFLICT (name) DO NOTHING;
+
+-- Sync sequence for rag_query_logs auto-increment ID
+SELECT setval('rag_query_logs_id_seq', COALESCE((SELECT MAX(id) FROM rag_query_logs), 0) + 1, false);
+

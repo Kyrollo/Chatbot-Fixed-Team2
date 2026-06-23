@@ -169,3 +169,43 @@ async def get_metrics(
             "failed": failed_docs,
         }
     }
+
+
+@router.post("/reset")
+async def reset_metrics(
+    admin: SystemAdmin
+):
+    """
+    Resets infrastructure metrics in Redis and clears retrieval latencies.
+    Requires System Admin privilege.
+    """
+    redis_client = get_redis()
+    if redis_client:
+        try:
+            # Delete custom metrics keys
+            keys_to_delete = [
+                "rag:metrics:vector:count",
+                "rag:metrics:vector:total_ms",
+                "rag:metrics:bm25:count",
+                "rag:metrics:bm25:total_ms",
+                "rag:metrics:fusion:count",
+                "rag:metrics:fusion:total_score",
+                "rag:metrics:llm:api",
+                "rag:metrics:llm:local",
+            ]
+            for key in keys_to_delete:
+                await redis_client.delete(key)
+            
+            # Reset Redis stats (hits/misses)
+            try:
+                await redis_client.execute_command("CONFIG", "RESETSTAT")
+            except Exception as e:
+                logger.warning("Failed to reset Redis stats: %s", e)
+                
+            return {"status": "ok", "message": "Monitoring metrics reset successfully"}
+        except Exception as e:
+            logger.warning("Failed to reset Redis metrics: %s", e)
+            return {"status": "error", "message": str(e)}
+        finally:
+            await redis_client.aclose()
+    return {"status": "ok", "message": "No active Redis to reset (in-memory cache)"}

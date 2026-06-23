@@ -24,6 +24,90 @@ logger = logging.getLogger(__name__)
 # 1. Convert raw table data to natural-language row descriptions
 # ──────────────────────────────────────────────────────────────────────────────
 
+def preprocess_table(data: list[list[str]]) -> tuple[list[str], list[list[str]]]:
+    """
+    Preprocesses raw table data to handle:
+    1. Stacked Headers: Combines multiple header rows vertically into single self-contained headers.
+    2. Horizontal Merged Cells in headers: Fills empty cells in headers by replicating the value to the right.
+    3. Stream-merged rows: Detects if Camelot stream mode merged visual rows into single cells with newlines,
+       and splits/unmerges them into distinct, padded rows.
+
+    Returns:
+        A tuple of (combined_headers, cleaned_data_rows)
+    """
+    if not data:
+        return [], []
+
+    # 1. Determine the number of header rows dynamically
+    num_header_rows = 1
+    # Check rows up to index 3 (checking if indices 1, 2 look like data)
+    for i in range(1, min(4, len(data))):
+        row = data[i]
+        non_empty = [c for c in row if c is not None and str(c).strip()]
+        if not non_empty:
+            continue
+        numeric_count = sum(1 for c in non_empty if _is_numeric(str(c)))
+        ratio = numeric_count / len(non_empty) if non_empty else 0.0
+        if numeric_count >= 2 and ratio >= 0.3:
+            num_header_rows = i
+            break
+
+    # 2. Fill horizontal spans (merged cells) in header rows
+    temp_headers = []
+    for r in range(num_header_rows):
+        row = [str(c).strip() if c is not None else "" for c in data[r]]
+        last_val = ""
+        for c in range(len(row)):
+            if row[c]:
+                last_val = row[c]
+            else:
+                row[c] = last_val
+        temp_headers.append(row)
+
+    # 3. Combine multiple header rows vertically
+    combined_headers = []
+    num_cols = len(data[0]) if data else 0
+    for col_idx in range(num_cols):
+        col_parts = []
+        for r in range(num_header_rows):
+            if col_idx < len(temp_headers[r]):
+                val = temp_headers[r][col_idx].strip()
+                if val and val not in col_parts:
+                    col_parts.append(val)
+        combined_headers.append(" - ".join(col_parts))
+
+    # 4. Unmerge stream-merged data rows
+    cleaned_data_rows = []
+    for row in data[num_header_rows:]:
+        # Skip completely empty rows
+        if not any(cell is not None and str(cell).strip() for cell in row):
+            continue
+
+        split_cells = []
+        for cell in row:
+            val = str(cell) if cell is not None else ""
+            lines = [line.strip() for line in val.split("\n")]
+            split_cells.append(lines)
+
+        max_lines = max(len(lines) for lines in split_cells) if split_cells else 1
+
+        if max_lines > 1:
+            for line_idx in range(max_lines):
+                new_row = []
+                for lines in split_cells:
+                    if line_idx < len(lines):
+                        new_row.append(lines[line_idx])
+                    else:
+                        new_row.append("")
+                # Skip if the new row is completely empty
+                if any(new_row):
+                    cleaned_data_rows.append(new_row)
+        else:
+            cleaned_data_rows.append([lines[0] for lines in split_cells])
+
+    return combined_headers, cleaned_data_rows
+
+
 def table_to_nl_rows(
     data: list[list[str]],
     table_title: str = "Table",
@@ -48,21 +132,19 @@ def table_to_nl_rows(
         - Lower Paying Job $70,000–$79,999: $17,900
         - Lower Paying Job $80,000–$89,999: $19,200
     """
-    if not data or len(data) < 2:
+    headers, data_rows = preprocess_table(data)
+    if not headers or not data_rows:
         return []
-
-    # data[0] is the header row
-    headers = [str(cell).strip() if cell else "" for cell in data[0]]
 
     # Detect if the first column is a row header (label) vs data
     # Heuristic: if first column values are unique and non-numeric, treat as row header
-    first_col_values = [str(row[0]).strip() if row and row[0] else "" for row in data[1:]]
+    first_col_values = [str(row[0]).strip() if row and row[0] else "" for row in data_rows]
     has_row_header = _looks_like_row_header(first_col_values)
 
     nl_rows: list[str] = []
     prev_row_header = ""
 
-    for row_idx, row in enumerate(data[1:], start=1):
+    for row_idx, row in enumerate(data_rows, start=1):
         cells = [str(cell).strip() if cell else "" for cell in row]
 
         # Skip completely empty rows
@@ -101,7 +183,7 @@ def table_to_nl_rows(
 
     logger.debug(
         "table_to_nl_rows: %d data rows → %d NL descriptions (title='%s')",
-        len(data) - 1, len(nl_rows), table_title,
+        len(data_rows), len(nl_rows), table_title,
     )
     return nl_rows
 

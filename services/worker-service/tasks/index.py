@@ -117,6 +117,12 @@ def index_chunks(chunks: list[dict]) -> int:
     domain_id = chunks[0]["domain_id"]
     _ensure_collection(domain_id)
 
+    # Only points with non-null embeddings can be indexed in Qdrant
+    valid_chunks = [c for c in chunks if c.get("embedding") is not None]
+    if not valid_chunks:
+        print(f"  Qdrant: 0/{len(chunks)} chunks had embeddings, skipped vector database indexing.")
+        return 0
+
     points = [
         PointStruct(
             id=_chunk_id_to_int(chunk["chunk_id"]),
@@ -133,7 +139,7 @@ def index_chunks(chunks: list[dict]) -> int:
                 "filename":    chunk.get("filename", ""),
             },
         )
-        for chunk in chunks
+        for chunk in valid_chunks
     ]
 
     batch_size = 100
@@ -148,7 +154,7 @@ def index_chunks(chunks: list[dict]) -> int:
     finally:
         client.close()
 
-    print(f"  Qdrant: indexed {total}/{len(chunks)} chunks into '{domain_id}'")
+    print(f"  Qdrant: indexed {total}/{len(chunks)} chunks into '{domain_id}' (skipped {len(chunks) - len(valid_chunks)} chunks without embedding)")
     return total
 
 

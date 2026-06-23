@@ -29,11 +29,19 @@ app.include_router(retrieve_router, prefix="/api/v1", tags=["Retrieval"])
 
 @app.on_event("startup")
 async def startup() -> None:
+    if not settings.RETRIEVAL_WARMUP_ON_START:
+        return
     try:
-        from routes.retrieve import _get_service
-        await _get_service()
+        from services.embedding import get_embedding_service
+        from services.reranker import get_reranker_service
+
+        if settings.WARMUP_EMBEDDING:
+            await get_embedding_service().warmup()
+        if settings.WARMUP_RERANKER:
+            await get_reranker_service().warmup()
+        logger.info("Retrieval warmup completed at startup.")
     except Exception as exc:
-        logger.error("Failed to eagerly load EmbeddingService on startup: %s", exc)
+        logger.warning("Retrieval startup warmup failed: %s", exc)
 
 
 @app.get("/health", tags=["Health"])

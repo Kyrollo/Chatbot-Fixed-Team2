@@ -176,6 +176,81 @@ if os.name == "nt":
             # missing certifi block the rest of the module from loading.
             pass
 
+    try:
+        import safetensors as _st
+
+        if not getattr(_st, "_mmap_patched", False):
+            _orig_safe_open = _st.safe_open
+
+            class _SafeOpenInMemory:
+                _DTYPE_MAP = None
+
+                def __init__(self, filename, framework="pt", device="cpu"):
+                    import json
+                    import struct
+                    import torch
+
+                    if _SafeOpenInMemory._DTYPE_MAP is None:
+                        _SafeOpenInMemory._DTYPE_MAP = {
+                            "F64": torch.float64, "F32": torch.float32,
+                            "F16": torch.float16, "BF16": torch.bfloat16,
+                            "I64": torch.int64, "I32": torch.int32,
+                            "I16": torch.int16, "I8": torch.int8,
+                            "U8": torch.uint8, "BOOL": torch.bool,
+                        }
+
+                    self._tensors = {}
+                    self._metadata = {}
+
+                    with open(str(filename), "rb") as f:
+                        header_size = struct.unpack("<Q", f.read(8))[0]
+                        header = json.loads(f.read(header_size))
+                        data_base = 8 + header_size
+
+                        if "__metadata__" in header:
+                            self._metadata = header.pop("__metadata__")
+
+                        for name, info in header.items():
+                            start, end = info["data_offsets"]
+                            f.seek(data_base + start)
+                            raw = bytearray(f.read(end - start))
+                            dtype = self._DTYPE_MAP.get(info["dtype"], torch.float32)
+                            tensor = torch.frombuffer(raw, dtype=dtype).reshape(info["shape"])
+                            if device != "cpu":
+                                tensor = tensor.to(device)
+                            self._tensors[name] = tensor
+
+                def keys(self):
+                    return self._tensors.keys()
+
+                def get_tensor(self, name):
+                    return self._tensors[name]
+
+                def metadata(self):
+                    return self._metadata
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    pass
+
+            def _safe_open_no_mmap(*args, **kwargs):
+                kwargs.setdefault("disable_mmap", True)
+                try:
+                    return _orig_safe_open(*args, **kwargs)
+                except TypeError:
+                    kwargs.pop("disable_mmap", None)
+                    try:
+                        return _orig_safe_open(*args, **kwargs)
+                    except OSError:
+                        return _SafeOpenInMemory(*args, **kwargs)
+
+            _st.safe_open = _safe_open_no_mmap
+            _st._mmap_patched = True
+    except ImportError:
+        pass
+
 import logging
 from typing import Optional
 
@@ -306,7 +381,7 @@ def _get_ragas_embeddings():
 
     from ragas.embeddings.huggingface_provider import HuggingFaceEmbeddings
 
-    model_name = os.getenv("RAGAS_EMBEDDING_MODEL", "intfloat/multilingual-e5-small")
+    model_name = os.getenv("RAGAS_EMBEDDING_MODEL") or os.getenv("EMBEDDING_MODEL") or "intfloat/multilingual-e5-small"
 
     _ragas_embeddings = HuggingFaceEmbeddings(
         model=model_name,

@@ -195,13 +195,20 @@ def _split_markdown_table(block: str, max_rows_per_chunk: int = 25) -> list[str]
     if not lines:
         return []
 
-    # Identify header lines (first row + separator)
+    # Identify header lines (first row + separator) and optional title prefix
     header_lines = []
     data_lines = []
     found_separator = False
+    table_title_line = None
 
-    for i, line in enumerate(lines):
-        if i == 0:
+    start_idx = 0
+    if lines and not lines[0].strip().startswith("|"):
+        table_title_line = lines[0].strip()
+        start_idx = 1
+
+    for i in range(start_idx, len(lines)):
+        line = lines[i]
+        if i == start_idx:
             header_lines.append(line)
         elif not found_separator and re.match(r'^\|[\s\-:|]+\|$', line):
             header_lines.append(line)
@@ -211,7 +218,8 @@ def _split_markdown_table(block: str, max_rows_per_chunk: int = 25) -> list[str]
 
     if not data_lines:
         # Table with only headers — return as single chunk
-        return [f"{start_marker}\n{inner}\n{end_marker}"]
+        title_prefix = f"{table_title_line}\n" if table_title_line else ""
+        return [f"{start_marker}\n{title_prefix}{inner}\n{end_marker}"]
 
     # Split data rows into segments with headers replicated
     chunks = []
@@ -220,7 +228,10 @@ def _split_markdown_table(block: str, max_rows_per_chunk: int = 25) -> list[str]
     for i in range(0, len(data_lines), max_rows_per_chunk):
         segment_lines = data_lines[i: i + max_rows_per_chunk]
         segment_text = header_text + "\n" + "\n".join(segment_lines)
-        chunks.append(f"{start_marker}\n{segment_text}\n{end_marker}")
+        if table_title_line:
+            chunks.append(f"{start_marker}\n{table_title_line}\n{segment_text}\n{end_marker}")
+        else:
+            chunks.append(f"{start_marker}\n{segment_text}\n{end_marker}")
 
     return chunks
 

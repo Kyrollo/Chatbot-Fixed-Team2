@@ -43,26 +43,19 @@ def _issuer_candidates() -> list[str]:
 
 
 @lru_cache
-def _get_public_key() -> str:
+def _get_public_key() -> str | None:
     if settings.KEYCLOAK_PUBLIC_KEY.strip():
         return _build_public_key(settings.KEYCLOAK_PUBLIC_KEY)
 
     try:
-        with urlopen(settings.KEYCLOAK_REALM_URL, timeout=5) as resp:
+        with urlopen(settings.KEYCLOAK_REALM_URL, timeout=3) as resp:
             data = json.load(resp)
-    except URLError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Cannot reach Keycloak: {exc}",
-        ) from exc
-
-    pk = data.get("public_key")
-    if not pk:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Keycloak did not return a public_key",
-        )
-    return _build_public_key(pk)
+            pk = data.get("public_key")
+            if pk:
+                return _build_public_key(pk)
+    except Exception:
+        pass
+    return None
 
 
 def _extract_roles(payload: dict) -> list[str]:
@@ -85,31 +78,34 @@ async def get_current_user(
     public_key = _get_public_key()
     errors: list[str] = []
 
-    for issuer in _issuer_candidates():
-        try:
-            payload = jwt.decode(
-                credentials.credentials,
-                public_key,
-                algorithms=[settings.KEYCLOAK_ALGORITHM],
-                audience=settings.KEYCLOAK_CLIENT_ID,
-                issuer=issuer,
-                options={"verify_aud": False},
-            )
-            user_id = payload.get("sub")
-            if not user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Token missing subject (sub) claim",
+    if public_key:
+        for issuer in _issuer_candidates():
+            try:
+                payload = jwt.decode(
+                    credentials.credentials,
+                    public_key,
+                    algorithms=[settings.KEYCLOAK_ALGORITHM],
+                    audience=settings.KEYCLOAK_CLIENT_ID,
+                    issuer=issuer,
+                    options={"verify_aud": False},
                 )
-            roles = _extract_roles(payload)
-            return {
-                "user_id": user_id,
-                "roles": roles,
-                "is_system_admin": settings.SYSTEM_ADMIN_ROLE in roles,
-                "token": credentials.credentials,
-            }
-        except JWTError as exc:
-            errors.append(f"{issuer}: {exc}")
+                user_id = payload.get("sub")
+                if not user_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Token missing subject (sub) claim",
+                    )
+                roles = _extract_roles(payload)
+                return {
+                    "user_id": user_id,
+                    "roles": roles,
+                    "is_system_admin": settings.SYSTEM_ADMIN_ROLE in roles,
+                    "token": credentials.credentials,
+                }
+            except JWTError as exc:
+                errors.append(f"{issuer}: {exc}")
+    else:
+        errors.append("Keycloak realm public key is not available (Keycloak is offline).")
 
     # Fallback for local dev login (minted via dev_auth.py)
     try:

@@ -38,3 +38,4 @@ class ChunkResult(BaseModel):
 class RetrievalResponse(BaseModel):
     results: list[ChunkResult]
     cache_hit: bool = False
+    diagnostics: dict | None = None

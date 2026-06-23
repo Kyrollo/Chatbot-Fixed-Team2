@@ -118,7 +118,7 @@ def _ensure_ocr_service_on_path() -> None:
     )
 
 
-@worker_process_init.connect
+# @worker_process_init.connect
 def _warm_up_ocr_on_worker_start(**kwargs):
     """
     Fires once when this worker process boots (before it starts consuming

@@ -2,8 +2,11 @@ import logging
 
 from fastapi import APIRouter, HTTPException, status
 
+from config import settings
 from dependencies import CurrentUser, check_domain_access
 from schemas.retrieval import RetrievalRequest, RetrievalResponse
+from services.embedding import get_embedding_service
+from services.reranker import get_reranker_service
 from services.retrieval_service import RetrievalService
 
 logger = logging.getLogger(__name__)
@@ -69,3 +72,19 @@ async def retrieve(request: RetrievalRequest, user: CurrentUser) -> RetrievalRes
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Retrieval failed. Please try again.",
         )
+
+
+@router.post("/warmup", summary="Warm local retrieval models")
+async def warmup() -> dict:
+    embedding_loaded = False
+    reranker_loaded = False
+    if settings.WARMUP_EMBEDDING:
+        await get_embedding_service().warmup()
+        embedding_loaded = True
+    if settings.WARMUP_RERANKER:
+        reranker_loaded = await get_reranker_service().warmup()
+    return {
+        "status": "ok",
+        "embedding_loaded": embedding_loaded,
+        "reranker_loaded": reranker_loaded,
+    }

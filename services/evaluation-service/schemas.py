@@ -37,6 +37,7 @@ class EvaluationRequest(BaseModel):
     query: str
     answer: str
     context_chunks: list[str] = Field(default_factory=list)
+    query_id: Optional[int] = None
 
 
 class EvaluationResponse(BaseModel):
