@@ -20,6 +20,7 @@ class RerankerService:
     def __init__(self) -> None:
         self._model = None
         self._load_failed = False
+        self._lock = asyncio.Lock()
 
     def _ensure_model(self) -> bool:
         if self._model is not None:
@@ -50,31 +51,43 @@ class RerankerService:
         if not candidates:
             return []
 
-        if not self._ensure_model():
-            logger.warning("Reranker unavailable — returning candidates by fusion score")
-            return sorted(candidates, key=lambda c: c.score, reverse=True)[:top_k]
+        async with self._lock:
+            if not self._ensure_model():
+                logger.warning("Reranker unavailable — returning candidates by fusion score")
+                return sorted(candidates, key=lambda c: c.score, reverse=True)[:top_k]
 
-        logger.info(
-            "Reranker input: %d candidates for query=%r",
-            len(candidates),
-            query[:60],
-        )
-
-        # Log top candidates before reranking
-        for i, c in enumerate(candidates[:5]):
             logger.info(
-                "  [before] rank=%d chunk=%s page=%s rrf_score=%.5f text_preview=%r",
-                i + 1,
-                c.chunk_id[:8],
-                c.page,
-                c.score,
-                c.text[:80],
+                "Reranker input: %d candidates for query=%r",
+                len(candidates),
+                query[:60],
             )
 
-        t0 = time.perf_counter()
-        pairs = [(query, item.text) for item in candidates]
-        scores = await asyncio.to_thread(self._model.predict, pairs)
-        elapsed = time.perf_counter() - t0
+            # Log top candidates before reranking
+            for i, c in enumerate(candidates[:5]):
+                logger.info(
+                    "  [before] rank=%d chunk=%s page=%s rrf_score=%.5f text_preview=%r",
+                    i + 1,
+                    c.chunk_id[:8],
+                    c.page,
+                    c.score,
+                    c.text[:80],
+                )
+
+            t0 = time.perf_counter()
+            pairs = [(query, item.text) for item in candidates]
+            scores = await asyncio.to_thread(self._model.predict, pairs)
+            elapsed = time.perf_counter() - t0
+
+            # Dynamic Model Offloading: unload model and trigger GC to save RAM
+            self._model = None
+            import gc
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except ImportError:
+                pass
 
         reranked = [
             ChunkResult(

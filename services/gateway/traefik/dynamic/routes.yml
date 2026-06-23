@@ -57,6 +57,14 @@ http:
       entryPoints:
         - web
 
+    moderation-service:
+      rule: "PathPrefix(`/moderation`)"
+      service: evaluation-service
+      middlewares:
+        - auth-keycloak
+      entryPoints:
+        - web
+
   services:
 
     domain-service:

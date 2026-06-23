@@ -55,7 +55,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Index,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -267,3 +267,22 @@ class EvalCursor(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+
+class AuditLog(Base):
+    """
+    Table to store audit events for the evaluation service (dashboard history).
+    """
+    __tablename__ = "audit_logs"
+
+    id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_type  = Column(String(64), nullable=False)
+    actor       = Column(String(255), nullable=True)
+    query_id    = Column(BigInteger, nullable=True)
+    details     = Column(JSONB, nullable=True)
+    created_at  = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+

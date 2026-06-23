@@ -120,6 +120,10 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
     out.setdefault("TOKENIZERS_PARALLELISM", "false")
     # Skip PyTorch CUDA memory caching (CPU-only — saves memory overhead).
     out.setdefault("PYTORCH_NO_CUDA_MEMORY_CACHING", "1")
+    # Set PaddleX model source to BOS (Baidu Object Storage) and bypass connectivity checks
+    # to avoid failing downloads from blocked or unreliable Hugging Face / AI Studio endpoints.
+    out.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
+    out.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
     return out
 
 
@@ -182,6 +186,39 @@ def start_worker(env: dict[str, str]) -> subprocess.Popen:
     print("  -> worker-service (Celery, queue: ingestion)")
     return subprocess.Popen(
         worker_cmd(), cwd=WORKER["dir"], env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+
+
+def evaluation_worker_cmd() -> list[str]:
+    cmd = [
+        PYTHON, "-m", "celery", "-A", "celery_app", "worker",
+        "--loglevel=info", "-Q", "evaluation", "--concurrency=1",
+    ]
+    if os.name == "nt":
+        cmd.extend(["--pool=solo"])
+    return cmd
+
+
+def evaluation_beat_cmd() -> list[str]:
+    return [
+        PYTHON, "-m", "celery", "-A", "celery_app", "beat",
+        "--loglevel=info",
+    ]
+
+
+def start_evaluation_worker(env: dict[str, str]) -> subprocess.Popen:
+    print("  -> evaluation-worker (Celery, queue: evaluation)")
+    return subprocess.Popen(
+        evaluation_worker_cmd(), cwd=EVALUATION_SERVICE["dir"], env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+
+
+def start_evaluation_beat(env: dict[str, str]) -> subprocess.Popen:
+    print("  -> evaluation-beat (Celery Beat)")
+    return subprocess.Popen(
+        evaluation_beat_cmd(), cwd=EVALUATION_SERVICE["dir"], env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
 
@@ -291,6 +328,18 @@ def main() -> int:
             worker_proc = start_worker(env)
             attach_output_logger(WORKER["name"], worker_proc)
             processes.append((WORKER["name"], worker_proc))
+
+        if args.evaluation and use_redis:
+            # Short pause to stagger worker/beat startup
+            time.sleep(2)
+            eval_worker_proc = start_evaluation_worker(env)
+            attach_output_logger("evaluation-worker", eval_worker_proc)
+            processes.append(("evaluation-worker", eval_worker_proc))
+
+            time.sleep(1)
+            eval_beat_proc = start_evaluation_beat(env)
+            attach_output_logger("evaluation-beat", eval_beat_proc)
+            processes.append(("evaluation-beat", eval_beat_proc))
 
         print("\n" + "=" * 60)
         print("  All processes started. Press Ctrl+C to stop.")

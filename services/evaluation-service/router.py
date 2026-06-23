@@ -68,7 +68,7 @@ async def evaluate(payload: EvaluationRequest) -> EvaluationResponse:
     # them for this (query, answer) pair. Best-effort — never breaks
     # the response already computed above.
     try:
-        from db.queries import save_live_evaluation_cache, ensure_tables_exist
+        from db.queries import save_live_evaluation_cache, ensure_tables_exist, log_audit_event
 
         ensure_tables_exist()
         save_live_evaluation_cache(
@@ -77,14 +77,35 @@ async def evaluate(payload: EvaluationRequest) -> EvaluationResponse:
             context_chunks=payload.context_chunks,
             reference=getattr(payload, "reference", None),
         )
+        
+        # Log to audit_logs
+        log_audit_event(
+            event_type="live_evaluation",
+            actor=None,
+            query_id=None,
+            details={"score": result.score, "model": getattr(result, "model", None) or "custom_judge"}
+        )
     except Exception as exc:
         logger.warning(
-            "Could not cache context for batch re-evaluation "
+            "Could not cache context or log audit for evaluation "
             "(live /evaluate response is unaffected): %s",
             exc,
         )
 
     return result
+
+
+@router.get("/logs")
+async def get_eval_logs():
+    """
+    Returns recent evaluation logs.
+    """
+    try:
+        from db.queries import list_evaluation_logs
+        logs = list_evaluation_logs()
+        return {"logs": logs}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 async def close_router_resources() -> None:

@@ -1,9 +1,10 @@
 // src/pages/LoginPage.tsx
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
 import { ShieldCheck, KeyRound, AlertTriangle } from 'lucide-react'
 import { domainApi } from '../lib/api'
+import { jwtDecode } from 'jwt-decode'
 
 export default function LoginPage() {
   const [userId, setUserId] = useState('')
@@ -11,6 +12,65 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const setTokenStore = useAuthStore((s) => s.setToken)
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+
+  useEffect(() => {
+    const code = searchParams.get('code')
+    if (code) {
+      handleKeycloakCode(code)
+    }
+  }, [searchParams])
+
+  async function handleKeycloakCode(code: string) {
+    setLoading(true)
+    setError('')
+    try {
+      const res = await fetch('http://localhost:8180/realms/rag-system/protocol/openid-connect/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          client_id: 'rag-ui',
+          code: code,
+          redirect_uri: 'http://localhost:5173/login',
+        }),
+      })
+
+      if (!res.ok) {
+        throw new Error(`Keycloak error: ${res.statusText}`)
+      }
+
+      const data = await res.json()
+      if (data.access_token) {
+        setTokenStore(data.access_token)
+        const decoded: any = jwtDecode(data.access_token)
+        const roles = decoded.realm_access?.roles || []
+        if (roles.includes('system_admin')) {
+          navigate('/admin')
+        } else if (roles.includes('domain_admin')) {
+          navigate('/domains')
+        } else {
+          navigate('/chat')
+        }
+      }
+    } catch (err: any) {
+      console.error(err)
+      setError(err.message || 'Keycloak authentication failed.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleKeycloakRedirect() {
+    const authUrl = 'http://localhost:8180/realms/rag-system/protocol/openid-connect/auth' + 
+      '?client_id=rag-ui' +
+      '&redirect_uri=' + encodeURIComponent('http://localhost:5173/login') +
+      '&response_type=code' +
+      '&scope=openid%20profile%20email'
+    window.location.href = authUrl
+  }
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -87,6 +147,21 @@ export default function LoginPage() {
             className="w-full bg-primary text-primary-foreground rounded-md py-2.5 font-semibold hover:opacity-90 transition shadow-lg shadow-primary/20 flex items-center justify-center gap-2 disabled:opacity-50"
           >
             {loading ? 'Authenticating...' : 'Sign In'}
+          </button>
+
+          <div className="flex items-center my-4">
+            <div className="flex-grow border-t border-border/60"></div>
+            <span className="mx-3 text-xs text-muted-foreground uppercase font-semibold">Or</span>
+            <div className="flex-grow border-t border-border/60"></div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleKeycloakRedirect}
+            disabled={loading}
+            className="w-full bg-card hover:bg-muted text-card-foreground border border-border rounded-md py-2.5 font-semibold transition flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            Sign In with Keycloak (OIDC)
           </button>
         </form>
 

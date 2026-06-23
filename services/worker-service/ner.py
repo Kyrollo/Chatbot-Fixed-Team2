@@ -187,4 +187,18 @@ def extract_entities_for_chunks(chunks: list[dict]) -> list[dict]:
         total_entities += len(entities)
 
     print(f"  Extracted {total_entities} entities across {len(chunks)} chunks")
+
+    # Clear GLiNER model from RAM immediately after task completion
+    global _model
+    if _model is not None:
+        import gc
+        _model = None
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
     return chunks

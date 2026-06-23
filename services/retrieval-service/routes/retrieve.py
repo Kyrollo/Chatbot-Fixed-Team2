@@ -9,23 +9,29 @@ from services.retrieval_service import RetrievalService
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+import asyncio
+
+_service_lock = asyncio.Lock()
 _service: RetrievalService | None = None
 
 
-def _get_service() -> RetrievalService:
+async def _get_service() -> RetrievalService:
     """Lazy singleton — retries construction on subsequent requests if it failed before.
 
-    The old code would leave _service as None forever if __init__ threw,
-    permanently poisoning the endpoint.  Now we retry each time so transient
-    issues (model still downloading, Qdrant locked, etc.) can self-heal.
+    Uses an asyncio.Lock to ensure only one request initializes the service at a time,
+    preventing concurrent model loading.
     """
     global _service
     if _service is None:
-        try:
-            _service = RetrievalService()
-        except Exception:
-            logger.exception("Failed to initialise RetrievalService — will retry on next request")
-            raise
+        async with _service_lock:
+            if _service is None:
+                try:
+                    logger.info("Initializing RetrievalService (loading model)...")
+                    _service = RetrievalService()
+                    logger.info("RetrievalService initialized successfully.")
+                except Exception:
+                    logger.exception("Failed to initialise RetrievalService — will retry on next request")
+                    raise
     return _service
 
 
@@ -55,7 +61,7 @@ async def retrieve(request: RetrievalRequest, user: CurrentUser) -> RetrievalRes
         )
 
     try:
-        svc = _get_service()
+        svc = await _get_service()
         return await svc.retrieve(request)
     except Exception as exc:
         logger.exception("Retrieval failed: %s", exc)

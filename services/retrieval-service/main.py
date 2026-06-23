@@ -27,6 +27,15 @@ app = FastAPI(
 app.include_router(retrieve_router, prefix="/api/v1", tags=["Retrieval"])
 
 
+@app.on_event("startup")
+async def startup() -> None:
+    try:
+        from routes.retrieve import _get_service
+        await _get_service()
+    except Exception as exc:
+        logger.error("Failed to eagerly load EmbeddingService on startup: %s", exc)
+
+
 @app.get("/health", tags=["Health"])
 async def health() -> dict:
     return {"status": "ok", "service": settings.SERVICE_NAME}

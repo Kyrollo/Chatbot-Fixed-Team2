@@ -5,14 +5,15 @@ Small FastAPI router for the human review side of the moderation queue.
 """
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from typing import Optional
 
 from schemas import (
     ModerationDecision,
     ModerationDecisionOut,
     ModerationQueueResponse,
 )
-from db.queries import list_pending_moderation_items, decide_moderation_item
+from db.queries import list_pending_moderation_items, decide_moderation_item, list_audit_logs
 from metrics import moderation_queue_size  # FIX: added import
 
 router = APIRouter()
@@ -48,6 +49,15 @@ async def submit_decision(item_id: uuid.UUID, body: ModerationDecision):
         raise HTTPException(status_code=404, detail=f"Moderation item {item_id} not found")
 
     return {"item_id": item_id, "status": body.decision}
+
+
+@router.get("/audit")
+async def get_audit_logs(event_type: Optional[str] = Query(None)):
+    """
+    Returns audit logs of the evaluation/moderation actions.
+    """
+    logs = list_audit_logs(event_type=event_type)
+    return {"logs": logs}
 
 
 @router.get("/health")

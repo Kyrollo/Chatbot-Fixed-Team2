@@ -74,6 +74,7 @@ from db.queries import (
     advance_cursor,
     prune_old_cache_entries,
     MODERATION_THRESHOLD,
+    log_audit_event,
 )
 from tasks.moderation import should_flag_for_moderation
 
@@ -314,6 +315,22 @@ def evaluate_recent_answers(self):
         eval_runs_total.inc()
         eval_rows_evaluated.inc(evaluated)
         eval_rows_flagged.inc(flagged)
+
+    try:
+        log_audit_event(
+            event_type="batch_run",
+            actor="celery_beat",
+            query_id=None,
+            details={
+                "evaluated": evaluated,
+                "flagged": flagged,
+                "cursor_before": cursor_before,
+                "cursor_after": max_id_seen,
+                "pruned": pruned,
+            },
+        )
+    except Exception as exc:
+        logger.warning("Could not log batch run audit: %s", exc)
 
     logger.info(
         "evaluate_recent_answers complete — evaluated=%d flagged=%d "

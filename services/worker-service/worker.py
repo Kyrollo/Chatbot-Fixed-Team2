@@ -79,6 +79,7 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,            # one job at a time per worker (CPU-heavy)
     task_acks_late=True,                     # only ack after task completes (safe retry)
     broker_connection_retry_on_startup=True, # suppress CPendingDeprecationWarning in Celery 6+
+    worker_max_tasks_per_child=1,            # recycle worker child process after each task to reclaim memory
 )
 
 

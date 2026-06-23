@@ -53,6 +53,7 @@ from db.models import (
     ModerationQueueItem,
     LiveEvaluationCache,
     EvalCursor,
+    AuditLog,
     context_cache_key,
 )
 
@@ -523,6 +524,18 @@ def decide_moderation_item(
         item.reviewer       = reviewer
         item.decision_notes = notes
         item.decided_at     = datetime.now(timezone.utc)
+
+        # Log decision to audit_logs
+        log = AuditLog(
+            id=uuid.uuid4(),
+            event_type="moderation_decision",
+            actor=reviewer,
+            query_id=item.query_id,
+            details={"decision": decision, "notes": notes},
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(log)
+
         session.commit()
         return True
     except Exception:
@@ -530,3 +543,92 @@ def decide_moderation_item(
         raise
     finally:
         session.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Audit logging and Evaluation logs
+# ─────────────────────────────────────────────────────────────────────────────
+
+def log_audit_event(
+    event_type: str,
+    actor: Optional[str] = None,
+    query_id: Optional[int] = None,
+    details: Optional[dict] = None,
+) -> None:
+    """
+    Inserts a new event row in the audit_logs table. Best effort, never blocks execution.
+    """
+    session = SessionLocal()
+    try:
+        log = AuditLog(
+            id=uuid.uuid4(),
+            event_type=event_type,
+            actor=actor,
+            query_id=query_id,
+            details=details or {},
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(log)
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        # Non-fatal log
+        import logging
+        logging.getLogger(__name__).warning("Failed to write to audit_logs: %s", exc)
+    finally:
+        session.close()
+
+
+def list_audit_logs(event_type: Optional[str] = None, limit: int = 50) -> list[dict]:
+    """
+    Returns audit logs filtered optionally by event_type.
+    """
+    session = SessionLocal()
+    try:
+        q = session.query(AuditLog)
+        if event_type and event_type != "all":
+            q = q.filter(AuditLog.event_type == event_type)
+        rows = q.order_by(AuditLog.created_at.desc()).limit(limit).all()
+        return [
+            {
+                "id": str(r.id),
+                "event_type": r.event_type,
+                "actor": r.actor,
+                "query_id": r.query_id,
+                "details": r.details,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows
+        ]
+    finally:
+        session.close()
+
+
+def list_evaluation_logs(limit: int = 50) -> list[dict]:
+    """
+    Returns the recent evaluation logs.
+    """
+    session = SessionLocal()
+    try:
+        rows = (
+            session.query(EvaluationLog)
+            .order_by(EvaluationLog.evaluated_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "id": str(r.id),
+                "query_id": r.query_id,
+                "model_used": r.model_used,
+                "overall_score": r.overall_score,
+                "faithfulness_score": r.faithfulness_score,
+                "relevance_score": r.relevance_score,
+                "completeness_score": r.completeness_score,
+                "evaluated_at": r.evaluated_at.isoformat(),
+            }
+            for r in rows
+        ]
+    finally:
+        session.close()
+
