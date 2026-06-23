@@ -63,13 +63,15 @@ Rules:
 def _weights_from_decision(decision: dict) -> tuple[float, float, float]:
     use_v = decision.get("use_vector", True)
     use_b = decision.get("use_bm25", True)
+    use_g = decision.get("use_graph", False)
+    g_w = 0.5 if use_g else 0.0
     if use_v and use_b:
-        return 0.7, 0.3, 0.0
+        return 0.7, 0.3, g_w
     if use_v:
-        return 1.0, 0.0, 0.0
+        return 1.0, 0.0, g_w
     if use_b:
-        return 0.0, 1.0, 0.0
-    return 0.7, 0.3, 0.0
+        return 0.0, 1.0, g_w
+    return 0.7, 0.3, g_w
 
 
 def _choose_llm() -> tuple[str, str, dict]:
@@ -116,20 +118,32 @@ async def route_query(query: str, analysis: QueryAnalysis) -> RoutingDecision:
 
         if not decision.get("use_vector") and not decision.get("use_bm25"):
             logger.warning("LLM returned all engines disabled — using fallback")
-            return _FALLBACK
+            raise ValueError("All engines disabled by LLM decision")
 
-        decision["use_graph"] = False
+        use_graph = False
+        if settings.AGE_DATABASE_DSN:
+            query_lower = query.lower()
+            relational_keywords = [
+                "manages", "belongs to", "reports to", "owns", "has role", "works on", "has skill", "based at",
+                "who is", "who manages", "reports to", "works in",
+                "من يدير", "يعمل في", "علاقه", "مدير", "وظيفة", "قسم", "مهارات", "تابع ل", "مسؤول عن", "يتبع ل"
+            ]
+            has_rel_keyword = any(kw in query_lower for kw in relational_keywords)
+            if analysis.contains_entities or has_rel_keyword:
+                use_graph = True
+
+        decision["use_graph"] = use_graph
         v_w, b_w, g_w = _weights_from_decision(decision)
 
         logger.info(
-            "LLM routing: vector=%s bm25=%s (decided_by=llm)",
-            decision["use_vector"], decision["use_bm25"],
+            "LLM routing: vector=%s bm25=%s graph=%s (decided_by=llm)",
+            decision["use_vector"], decision["use_bm25"], use_graph,
         )
 
         return RoutingDecision(
             use_vector=bool(decision["use_vector"]),
             use_bm25=bool(decision["use_bm25"]),
-            use_graph=False,
+            use_graph=use_graph,
             vector_weight=v_w,
             bm25_weight=b_w,
             graph_weight=g_w,
@@ -138,4 +152,23 @@ async def route_query(query: str, analysis: QueryAnalysis) -> RoutingDecision:
 
     except Exception as exc:
         logger.warning("RetrievalRouter LLM call failed (%s) — using fallback", exc)
-        return _FALLBACK
+        use_graph = False
+        if settings.AGE_DATABASE_DSN:
+            query_lower = query.lower()
+            relational_keywords = [
+                "manages", "belongs to", "reports to", "owns", "has role", "works on", "has skill", "based at",
+                "who is", "who manages", "reports to", "works in",
+                "من يدير", "يعمل في", "علاقه", "مدير", "وظيفة", "قسم", "مهارات", "تابع ل", "مسؤول عن", "يتبع ل"
+            ]
+            has_rel_keyword = any(kw in query_lower for kw in relational_keywords)
+            if analysis.contains_entities or has_rel_keyword:
+                use_graph = True
+        return RoutingDecision(
+            use_vector=_FALLBACK.use_vector,
+            use_bm25=_FALLBACK.use_bm25,
+            use_graph=use_graph,
+            vector_weight=_FALLBACK.vector_weight,
+            bm25_weight=_FALLBACK.bm25_weight,
+            graph_weight=0.5 if use_graph else 0.0,
+            decided_by="fallback",
+        )

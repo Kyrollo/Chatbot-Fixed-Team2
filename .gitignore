@@ -56,3 +56,12 @@ rag-ui/dist/
 
 # ─── Gemini agent workspace ──────────────────────────────────────────────────
 .gemini/.history/
+
+# Celery Beat
+celerybeat-schedule*
+*.bak
+*.dat
+*.dir
+
+# Redis
+dump.rdb

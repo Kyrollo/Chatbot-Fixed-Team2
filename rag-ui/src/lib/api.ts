@@ -128,3 +128,23 @@ export const adminApi = {
 export const monitoringApi = {
   metrics: () => api.get<any>('/monitoring/metrics'),
 }
+
+// Add these to src/lib/api.ts
+// Add after the existing evaluateApi block
+
+// --- Evaluation Service — Quality Dashboard ---
+export const qualityApi = {
+  // Recent evaluation logs (last 50)
+  evalLogs: () => api.get<{ logs: any[] }>('/evaluate/logs'),
+
+  // Moderation queue (pending items)
+  moderationQueue: () => api.get<{ count: number; items: any[] }>('/moderation/queue'),
+
+  // Submit approve/reject decision
+  decide: (itemId: string, decision: 'approved' | 'rejected', reviewer: string) =>
+    api.post(`/moderation/${itemId}/decide`, { decision, reviewer, notes: null }),
+
+  // Audit log
+  auditLogs: (eventType?: string) =>
+    api.get<{ logs: any[] }>(`/moderation/audit${eventType ? `?event_type=${eventType}` : ''}`),
+}

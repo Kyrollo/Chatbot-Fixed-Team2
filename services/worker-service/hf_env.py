@@ -23,6 +23,7 @@ import os
 import sys
 
 # Must be set before any HuggingFace / transformers import.
+os.environ.setdefault("HF_HOME", "D:\\huggingface_cache")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 

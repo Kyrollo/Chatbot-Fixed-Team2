@@ -17,6 +17,7 @@ export default defineConfig({
       '/generate': 'http://localhost:8004',
       '/query': 'http://localhost:8004',
       '/evaluate': 'http://localhost:8005',
+      '/moderation': 'http://localhost:8005',
     }
   }
 })

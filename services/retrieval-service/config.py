@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
     OLLAMA_MODEL: str = "llama3.2:3b"
 
+    # Apache AGE Graph Settings
+    AGE_DATABASE_DSN: str = ""
+    AGE_GRAPH_NAME: str = "rag_graph"
+
 
 settings = Settings()
 
