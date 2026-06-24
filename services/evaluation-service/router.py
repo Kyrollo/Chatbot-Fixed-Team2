@@ -87,5 +87,45 @@ async def evaluate(payload: EvaluationRequest) -> EvaluationResponse:
     return result
 
 
+@router.get("/logs")
+async def get_evaluation_logs(limit: int = 50) -> dict:
+    """Returns the most recent evaluation log entries for the Quality Dashboard."""
+    try:
+        from db.queries import SessionLocal, EvaluationLog
+        from db.models import EvaluationLog as EvalLogModel
+        session = SessionLocal()
+        try:
+            rows = (
+                session.query(EvalLogModel)
+                .order_by(EvalLogModel.evaluated_at.desc())
+                .limit(limit)
+                .all()
+            )
+            logs = [
+                {
+                    "id": str(r.id),
+                    "query_id": r.query_id,
+                    "model_used": r.model_used,
+                    "faithfulness_score": r.faithfulness_score,
+                    "relevance_score": r.relevance_score,
+                    "completeness_score": r.completeness_score,
+                    "overall_score": r.overall_score,
+                    "ragas_context_precision": r.ragas_context_precision,
+                    "ragas_context_recall": r.ragas_context_recall,
+                    "ragas_context_entity_recall": r.ragas_context_entity_recall,
+                    "ragas_answer_correctness": r.ragas_answer_correctness,
+                    "ragas_answer_similarity": r.ragas_answer_similarity,
+                    "evaluated_at": r.evaluated_at.isoformat() if r.evaluated_at else None,
+                }
+                for r in rows
+            ]
+        finally:
+            session.close()
+        return {"logs": logs, "count": len(logs)}
+    except Exception as exc:
+        logger.warning("get_evaluation_logs failed: %s", exc)
+        return {"logs": [], "count": 0}
+
+
 async def close_router_resources() -> None:
     await _judge.close()

@@ -13,6 +13,7 @@ Usage:
     python run_services.py                 # APIs + infra only (no worker)
     python run_services.py --worker        # also start Celery ingestion worker
     python run_services.py --evaluation    # also start evaluation-service on 8005
+    python run_services.py --eval-worker   # also start evaluation Celery worker + Beat
     python run_services.py --no-reload     # disable uvicorn --reload
     python run_services.py --skip-infra    # if Redis/Keycloak already running
 """
@@ -55,6 +56,7 @@ def resolve_python() -> str:
 
 
 PYTHON = resolve_python()
+EVAL_SERVICE_DIR = ROOT / "services" / "evaluation-service"
 
 
 def ensure_python_runtime() -> None:
@@ -71,8 +73,16 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
     user     = out.get("POSTGRES_USER", "postgres")
     password = quote(out.get("POSTGRES_PASSWORD", "postgres"), safe="")
     db       = out.get("POSTGRES_DB", "domain_db")
-    out["DATABASE_URL"]      = f"postgresql+asyncpg://{user}:{password}@localhost:5432/{db}"
-    out["SYNC_DATABASE_URL"] = f"postgresql://{user}:{password}@localhost:5432/{db}"
+    # Infer port from existing DATABASE_URL in .env, fallback to POSTGRES_PORT, then 5433
+    pg_port = out.get("POSTGRES_PORT", "5433")
+    existing_url = out.get("DATABASE_URL", "")
+    if "@localhost:" in existing_url:
+        try:
+            pg_port = existing_url.split("@localhost:")[1].split("/")[0]
+        except Exception:
+            pass
+    out["DATABASE_URL"]      = f"postgresql+asyncpg://{user}:{password}@localhost:{pg_port}/{db}"
+    out["SYNC_DATABASE_URL"] = f"postgresql://{user}:{password}@localhost:{pg_port}/{db}"
 
     if use_redis:
         out["REDIS_URL"] = "redis://localhost:6379/0"
@@ -165,6 +175,28 @@ def load_root_env(use_keycloak: bool, use_redis: bool) -> dict[str, str]:
     return apply_local_env(env, use_keycloak=use_keycloak, use_redis=use_redis)
 
 
+def load_eval_env(base_env: dict[str, str]) -> dict[str, str]:
+    """Load evaluation-service .env on top of the base env, stripping inline comments."""
+    env = dict(base_env)
+    eval_dotenv = EVAL_SERVICE_DIR / ".env"
+    if eval_dotenv.exists():
+        for line in eval_dotenv.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            # Strip inline comments (e.g. "1   # some comment" -> "1")
+            value = value.split("#")[0].strip()
+            key = key.strip()
+            if key:
+                env[key] = value
+    # Always add the evaluation-service dir to PYTHONPATH so judge.py is importable
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in [str(EVAL_SERVICE_DIR), env.get("PYTHONPATH", "")] if p
+    )
+    return env
+
+
 def start_uvicorn(service: dict, env: dict[str, str], reload: bool) -> subprocess.Popen:
     Path(env["UPLOAD_DIR"]).mkdir(parents=True, exist_ok=True)
     Path(env["QDRANT_PATH"]).mkdir(parents=True, exist_ok=True)
@@ -184,6 +216,30 @@ def start_worker(env: dict[str, str]) -> subprocess.Popen:
         worker_cmd(), cwd=WORKER["dir"], env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
+
+
+def start_eval_worker(base_env: dict[str, str]) -> tuple[subprocess.Popen, subprocess.Popen]:
+    """Start the evaluation Celery worker and Beat scheduler."""
+    eval_env = load_eval_env(base_env)
+
+    # Use sys.executable (the actual running python) not PYTHON which may resolve to .venv
+    python_exe = sys.executable
+
+    print("  -> eval-worker (Celery, queue: evaluation)")
+    worker = subprocess.Popen(
+        [python_exe, "-m", "celery", "-A", "celery_app", "worker",
+         "--loglevel=info", "--pool=solo", "--queues=evaluation"],
+        cwd=str(EVAL_SERVICE_DIR), env=eval_env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+
+    print("  -> eval-beat  (Celery Beat scheduler)")
+    beat = subprocess.Popen(
+        [python_exe, "-m", "celery", "-A", "celery_app", "beat", "--loglevel=info"],
+        cwd=str(EVAL_SERVICE_DIR), env=eval_env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    return worker, beat
 
 
 def purge_ingestion_queue() -> None:
@@ -229,10 +285,16 @@ def main() -> int:
         action="store_true",
         help="Also start the Celery ingestion worker (off by default — loads PyTorch/~3 GB DLLs)",
     )
-    parser.add_argument("--evaluation", action="store_true", help="Also start evaluation-service on port 8005")
-    parser.add_argument("--no-reload",  action="store_true", help="Disable uvicorn --reload")
-    parser.add_argument("--skip-infra", action="store_true", help="Skip starting Redis/Keycloak")
+    parser.add_argument("--evaluation",  action="store_true", help="Also start evaluation-service on port 8005")
+    parser.add_argument("--eval-worker", action="store_true", help="Also start evaluation Celery worker + Beat (auto-enables --evaluation)")
+    parser.add_argument("--no-reload",   action="store_true", help="Disable uvicorn --reload")
+    parser.add_argument("--skip-infra",  action="store_true", help="Skip starting Redis/Keycloak")
     args = parser.parse_args()
+
+    # --eval-worker implies --evaluation
+    if args.eval_worker:
+        args.evaluation = True
+
     ensure_python_runtime()
 
     infra_processes: list[tuple[str, subprocess.Popen]] = []
@@ -262,13 +324,15 @@ def main() -> int:
 
     print(f"\n[2/3] Configuration")
     print(f"  Python:     {PYTHON}")
-    print(f"  PostgreSQL: localhost:5432")
+    print(f"  PostgreSQL: localhost:{env.get('SYNC_DATABASE_URL','').split('@localhost:')[1].split('/')[0] if '@localhost:' in env.get('SYNC_DATABASE_URL','') else '5433'}")
     print(f"  Qdrant:     embedded at {env['QDRANT_PATH']}")
     print(f"  Auth:       {'Keycloak http://localhost:8180' if use_keycloak else 'dev JWT fallback'}")
     print(f"  Redis:      {'localhost:6379' if use_redis else 'unavailable (sync ingestion + memory cache)'}")
     print(f"  OCR:        embedded in worker-service (PaddleOCR + Surya)")
     if not args.worker:
         print(f"  Worker:     disabled (pass --worker to enable Celery ingestion)")
+    if args.eval_worker:
+        print(f"  Eval worker: enabled (Celery worker + Beat for evaluation queue)")
 
     print(f"\n[3/3] Starting API services{' + worker' if args.worker else ''}...")
 
@@ -292,6 +356,14 @@ def main() -> int:
             attach_output_logger(WORKER["name"], worker_proc)
             processes.append((WORKER["name"], worker_proc))
 
+        if args.eval_worker and use_redis:
+            time.sleep(2)
+            eval_worker_proc, eval_beat_proc = start_eval_worker(env)
+            attach_output_logger("eval-worker", eval_worker_proc)
+            attach_output_logger("eval-beat",   eval_beat_proc)
+            processes.append(("eval-worker", eval_worker_proc))
+            processes.append(("eval-beat",   eval_beat_proc))
+
         print("\n" + "=" * 60)
         print("  All processes started. Press Ctrl+C to stop.")
         print("=" * 60)
@@ -302,6 +374,9 @@ def main() -> int:
         if not args.worker:
             print("\n  Note: Celery worker not running.")
             print("  Start with:  python run_services.py --worker")
+        if not args.eval_worker:
+            print("\n  Note: Evaluation Celery worker not running.")
+            print("  Start with:  python run_services.py --evaluation --eval-worker")
         print()
 
         while True:
