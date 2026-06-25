@@ -14,6 +14,7 @@ import asyncio
 import logging
 
 from schemas.retrieval import RetrievalRequest, RetrievalResponse
+from config import settings
 from services.bm25_retriever import BM25Retriever
 from services.cache import get_retrieval_cache
 from services.graph_retriever import GraphRetriever
@@ -172,7 +173,7 @@ class RetrievalPipeline:
             # Stage 6: Re-rank
             reranked = await self._reranker.rerank(
                 request.query,
-                fused[:top_k_retrieve],
+                fused[:settings.RERANKER_CANDIDATE_CAP],
                 request.top_k_rerank,
             )
 

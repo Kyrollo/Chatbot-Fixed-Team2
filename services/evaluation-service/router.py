@@ -103,14 +103,18 @@ async def evaluate(payload: EvaluationRequest) -> EvaluationResponse:
         )
 
         if payload.query_id:
+            # Compute overall score as the average of the available scores
+            valid_scores = [v for v in [result.faithfulness, result.score, result.completeness] if v is not None]
+            overall = sum(valid_scores) / len(valid_scores) if valid_scores else result.score
+
             # Save the live evaluation result directly to evaluation_logs
             log_id = save_evaluation_result(
                 query_id=payload.query_id,
                 model_used="custom_judge",
-                faithfulness_score=None,
+                faithfulness_score=result.faithfulness,
                 relevance_score=result.score,
-                completeness_score=None,
-                overall_score=result.score,
+                completeness_score=result.completeness,
+                overall_score=overall,
                 raw_judge_response=result.explanation,
             )
 

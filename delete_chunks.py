@@ -102,16 +102,17 @@ async def _wipe_postgresql(cfg: dict[str, str]) -> int:
     password = cfg.get("POSTGRES_PASSWORD", "postgres")
     password_quoted = quote(password, safe="")
     db = cfg.get("POSTGRES_DB", "domain_db")
-    dsn = f"postgresql://{user}:{password_quoted}@localhost:5432/{db}"
+    port = cfg.get("POSTGRES_PORT", "5432")
+    dsn = f"postgresql://{user}:{password_quoted}@localhost:{port}/{db}"
 
     try:
-        print("\n  Connecting to PostgreSQL...")
+        print(f"\n  Connecting to PostgreSQL on port {port}...")
         conn = await asyncpg.connect(dsn)
     except OSError:
-        fail(f"Cannot connect to PostgreSQL at localhost:5432")
+        fail(f"Cannot connect to PostgreSQL at localhost:{port}")
         fail("  Is PostgreSQL running? Try:")
         if os.name == "nt":
-            fail("    net start postgresql-x64-16")
+            fail(f"    net start postgresql-x64-16 or check your Postgres 17 service")
         else:
             fail("    sudo systemctl start postgresql")
         return 0

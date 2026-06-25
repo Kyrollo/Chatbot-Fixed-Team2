@@ -35,6 +35,10 @@ class RerankerService:
         self._last_used = 0.0
         self._idle_timeout = float(settings.RERANKER_IDLE_TIMEOUT_SECONDS)
 
+    @property
+    def is_ready(self) -> bool:
+        return self._model is not None
+
     def _load_model(self) -> None:
         model_path = _validate_model_path(settings.RERANKER_MODEL)
         logger.info("Loading reranker model: %s (exists=%s)", model_path, model_path.exists())

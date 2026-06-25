@@ -28,7 +28,8 @@ if not _raw_url:
     user = os.getenv("POSTGRES_USER", "postgres")
     password = quote(os.getenv("POSTGRES_PASSWORD", "postgres"), safe="")
     db = os.getenv("POSTGRES_DB", "domain_db")
-    _raw_url = f"postgresql://{user}:{password}@localhost:5432/{db}"
+    pg_port = os.getenv("POSTGRES_PORT", "5432")
+    _raw_url = f"postgresql://{user}:{password}@localhost:{pg_port}/{db}"
 DATABASE_URL = _raw_url.replace("postgresql+asyncpg://", "postgresql://")
 
 _engine = create_engine(DATABASE_URL)
@@ -167,6 +168,9 @@ def _chunk_id_to_int(chunk_id: str) -> int:
 # PostgreSQL full-text indexing (for BM25 retrieval)
 # ──────────────────────────────────────────────────────────────────────────────
 
+_TSVEC_LANG = os.getenv("TSVEC_LANGUAGE", "simple")
+
+
 def index_chunks_postgres(chunks: list[dict]) -> int:
     """
     Inserts chunk text into document_chunks table with a precomputed tsvector.
@@ -186,10 +190,10 @@ def index_chunks_postgres(chunks: list[dict]) -> int:
                         (id, document_id, domain_id, page_num, chunk_index, text, source_type, chunk_type, filename, search_vec)
                     VALUES
                         (:id, :document_id, :domain_id, :page_num, :chunk_index, :text, :source_type, :chunk_type, :filename,
-                         to_tsvector('simple', :text))
+                         to_tsvector(:tsvec_lang, :text))
                     ON CONFLICT (id) DO UPDATE SET
                         text        = EXCLUDED.text,
-                        search_vec  = to_tsvector('simple', EXCLUDED.text),
+                        search_vec  = to_tsvector(:tsvec_lang, EXCLUDED.text),
                         page_num    = EXCLUDED.page_num,
                         chunk_index = EXCLUDED.chunk_index,
                         source_type = EXCLUDED.source_type,
@@ -206,6 +210,7 @@ def index_chunks_postgres(chunks: list[dict]) -> int:
                     "source_type": chunk.get("source_type", "pdf"),
                     "chunk_type":  chunk.get("chunk_type", "text"),
                     "filename":    chunk.get("filename", ""),
+                    "tsvec_lang":  _TSVEC_LANG,
                 },
             )
         conn.commit()

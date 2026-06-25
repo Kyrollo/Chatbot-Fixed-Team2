@@ -191,6 +191,13 @@ def evaluate_recent_answers(self):
         # same scoring behaviour as before this fix was applied.
         cached_chunks, reference = get_cached_context(row["query"], row["answer"])
         context = "\n\n".join(cached_chunks) if cached_chunks else None
+        if context is None:
+            logger.warning(
+                "query_id=%s has no cached context — faithfulness score will be "
+                "meaningless (context=None). Ensure EVALUATE_SYNC=true and "
+                "EVALUATE_ON_GENERATION=true in .env so all queries populate the cache.",
+                query_id,
+            )
 
         row_overall_scores: list[float] = []
         saved_log_ids: list = []

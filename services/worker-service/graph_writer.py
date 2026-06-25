@@ -78,7 +78,56 @@ def execute_cypher(cur, query: str, params: dict = None) -> list:
         except Exception:
             pass
 
+
+def _upsert_stub_vertex(cur, graph_name: str, name: str, domain_id: str, document_id: str):
+    """
+    Creates/updates a stub vertex for an unresolved entity.
+    Uses 'TaxTerm' as a default/generic label.
+    """
+    label = "TaxTerm"
+    norm_name = normalize_arabic(name).strip().casefold()
+    
+    # Check if vertex already exists
+    match_query = f"""
+        SELECT * FROM cypher('{graph_name}', $$
+            MATCH (v:{label})
+            WHERE v.normalized_name = $normalized_name AND v.domain_id = $domain_id
+            RETURN properties(v)
+        $$, $1) AS (properties agtype);
+    """
+    match_res = execute_cypher(cur, match_query, {
+        "normalized_name": norm_name,
+        "domain_id": domain_id
+    })
+    
+    if not match_res:
+        # Vertex doesn't exist: create new stub vertex
+        create_query = f"""
+            SELECT * FROM cypher('{graph_name}', $$
+                CREATE (v:{label} {{
+                    name: $name,
+                    normalized_name: $normalized_name,
+                    aliases: $aliases,
+                    domain_id: $domain_id,
+                    document_id: $document_id,
+                    chunk_ids: $chunk_ids,
+                    stub: true
+                }})
+                RETURN id(v)
+            $$, $1) AS (id agtype);
+        """
+        execute_cypher(cur, create_query, {
+            "name": name,
+            "normalized_name": norm_name,
+            "aliases": _normalized_aliases(name),
+            "domain_id": domain_id,
+            "document_id": document_id,
+            "chunk_ids": []
+        })
+
+
 def write_to_graph(chunks: list[dict], triples: list[dict], domain_id: str, document_id: str) -> dict:
+    conn = get_connection()
     """
     Persists entities and relationships (triples) extracted from chunks into Apache AGE.
     Resolves provenance links and handles Arabic text normalization.
@@ -90,12 +139,17 @@ def write_to_graph(chunks: list[dict], triples: list[dict], domain_id: str, docu
     try:
         graph_name = _safe_graph_name()
         with conn.cursor() as cur:
-            # Build helper map of normalized entity names to labels and original names
-            entity_label_map = {}
+            # Map various forms of the name (casefolded, aliases) to the canonical (norm_name, label)
+            canonical_resolver = {}
             for chunk in chunks:
                 for ent in chunk.get("entities", []):
+                    label = ent["label"]
+                    name = ent["text"]
                     norm = ent["normalized_text"]
-                    entity_label_map[norm] = ent["label"]
+                    
+                    canonical_resolver[norm.strip().casefold()] = (norm, label)
+                    for alias in _normalized_aliases(name):
+                        canonical_resolver[alias.strip().casefold()] = (norm, label)
             
             # Step 1: Upsert Vertices
             logger.info("Upserting entities into Apache AGE knowledge graph...")
@@ -177,16 +231,30 @@ def write_to_graph(chunks: list[dict], triples: list[dict], domain_id: str, docu
                     logger.warning(f"Skipping unregistered relation type: {relation_type}")
                     continue
                     
-                sub_norm = normalize_arabic(triple.get("subject", ""))
-                obj_norm = normalize_arabic(triple.get("object", ""))
+                sub_input = normalize_arabic(triple.get("subject", "")).strip().casefold()
+                obj_input = normalize_arabic(triple.get("object", "")).strip().casefold()
                 
-                sub_label = entity_label_map.get(sub_norm)
-                obj_label = entity_label_map.get(obj_norm)
+                sub_res = canonical_resolver.get(sub_input)
+                obj_res = canonical_resolver.get(obj_input)
                 
-                if not sub_label or not obj_label:
-                    # Skip relations referring to entities that were filtered out during NER
-                    logger.debug(f"Skipping triple with missing labels: {triple}")
-                    continue
+                if not sub_res or not obj_res:
+                    if not sub_res:
+                        logger.warning("Creating stub vertex for unresolved subject: '%s'", triple.get("subject"))
+                        _upsert_stub_vertex(cur, graph_name, triple.get("subject"), domain_id, document_id)
+                        sub_norm = normalize_arabic(triple.get("subject", "")).strip().casefold()
+                        sub_label = "TaxTerm"
+                        canonical_resolver[sub_input] = (sub_norm, sub_label)
+                        sub_res = (sub_norm, sub_label)
+                    if not obj_res:
+                        logger.warning("Creating stub vertex for unresolved object: '%s'", triple.get("object"))
+                        _upsert_stub_vertex(cur, graph_name, triple.get("object"), domain_id, document_id)
+                        obj_norm = normalize_arabic(triple.get("object", "")).strip().casefold()
+                        obj_label = "TaxTerm"
+                        canonical_resolver[obj_input] = (obj_norm, obj_label)
+                        obj_res = (obj_norm, obj_label)
+                
+                sub_norm, sub_label = sub_res
+                obj_norm, obj_label = obj_res
                 
                 # Determine chunk co-occurrence for provenance link
                 edge_chunks = []

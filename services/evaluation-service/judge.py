@@ -123,12 +123,16 @@ def evaluate_answer(query: str, answer: str, context: str | None = None) -> dict
         parsed = json.loads(raw)
     except Exception as exc:
         if settings.ALLOW_MOCK_JUDGE:
-            logger.warning("Judge LLM call failed (ALLOW_MOCK_JUDGE=True — returning mock): %s", exc)
+            logger.error(
+                "Judge LLM call failed — returning MOCK scores "
+                "(ALLOW_MOCK_JUDGE=True). Real evaluation is NOT running. "
+                "Error: %s", exc
+            )
             parsed = {
                 "faithfulness": 0.85,
                 "relevance": 0.90,
                 "completeness": 0.80,
-                "explanation": f"Mock evaluation (judge offline: {exc}).",
+                "explanation": f"[MOCK — judge offline: {exc}]",
             }
             raw = json.dumps(parsed)
         else:
@@ -140,6 +144,7 @@ def evaluate_answer(query: str, answer: str, context: str | None = None) -> dict
         "relevance":     max(0.0, min(1.0, float(parsed.get("relevance", 0.0)))),
         "completeness":  max(0.0, min(1.0, float(parsed.get("completeness", 0.0)))),
         "raw_response":  raw,
+        "is_mock":       parsed.get("explanation", "").startswith("[MOCK"),
     }
 
 
@@ -184,11 +189,27 @@ class JudgeService:
                 )
                 raise RuntimeError(f"Judge LLM unavailable: {exc}") from exc
 
+        faithfulness = None
+        if "faithfulness" in parsed:
+            try:
+                faithfulness = max(0.0, min(1.0, float(parsed["faithfulness"])))
+            except (ValueError, TypeError):
+                pass
+
+        completeness = None
+        if "completeness" in parsed:
+            try:
+                completeness = max(0.0, min(1.0, float(parsed["completeness"])))
+            except (ValueError, TypeError):
+                pass
+
         return EvaluationResponse(
             score=max(0.0, min(1.0, float(parsed.get("relevance", parsed.get("score", 0.0))))),
             explanation=str(parsed.get("explanation", "")).strip(),
             route_used=route_used,
             model=model,
+            faithfulness=faithfulness,
+            completeness=completeness,
         )
 
     async def close(self) -> None:

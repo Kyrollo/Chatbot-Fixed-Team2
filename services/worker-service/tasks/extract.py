@@ -85,18 +85,14 @@ _ensure_ocr_service_on_path()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# BUG FIX: these two imports were missing entirely in the previous version of
-# this file (lost during the Camelot/table-extraction rewrite), even though
-# both _extract_pdf() and _extract_image() call them below. That caused:
-#   NameError: name 'pdf_page_to_image' is not defined
-# on every PDF page / image that needed OCR (i.e. every scanned page).
-# ──────────────────────────────────────────────────────────────────────────────
+# Check if ocr_service is available in the environment without importing it
 try:
-    from ocr_service.pipeline import run_ocr_on_image
-    from ocr_service.preprocessing.image_processor import pdf_page_to_image
-    HAS_OCR = True
-except ImportError:
+    import importlib.util
+    HAS_OCR = importlib.util.find_spec("ocr_service") is not None
+except Exception:
     HAS_OCR = False
+
+if not HAS_OCR:
     logger.warning("ocr_service not found. OCR is disabled.")
 
 ENABLE_TABLE_EXTRACTION = os.getenv("ENABLE_TABLE_EXTRACTION", "true").lower() in {"1", "true", "yes"}
@@ -161,10 +157,11 @@ def extract_text(file_path: str, mime_type: str | None = None) -> list[dict]:
     finally:
         # Clear OCR models from memory after document extraction is done to free RAM
         try:
-            from ocr_service.engines.paddle_engine import _models as paddle_models
-            if paddle_models:
-                paddle_models.clear()
-                logger.info("Cleared PaddleOCR models from memory.")
+            if "ocr_service.engines.paddle_engine" in sys.modules:
+                from ocr_service.engines.paddle_engine import _models as paddle_models
+                if paddle_models:
+                    paddle_models.clear()
+                    logger.info("Cleared PaddleOCR models from memory.")
         except Exception:
             pass
         import gc
@@ -222,10 +219,10 @@ def _extract_tables_camelot(file_path: str, page_num: int, page_height: float) -
         return []
 
     page_str = str(page_num + 1)  # Camelot uses 1-indexed pages
-    results = []
+    all_candidates = []
 
+    # 1. Try lattice flavor
     try:
-        # Try lattice first (ruled/bordered tables — highest accuracy)
         tables = camelot.read_pdf(file_path, pages=page_str, flavor='lattice')
         for t in tables:
             accuracy = t.parsing_report.get('accuracy', 0)
@@ -240,49 +237,95 @@ def _extract_tables_camelot(file_path: str, page_num: int, page_height: float) -
                         px1 = cx1
                         py1 = page_height - cy0
                         bbox = (px0, py0, px1, py1)
-                    results.append({
+                    all_candidates.append({
                         'data': data,
                         'accuracy': accuracy,
                         'bbox': bbox,
                         'flavor': 'lattice',
                     })
-
-        # If no good lattice tables, try stream (borderless tables)
-        if not results:
-            tables = camelot.read_pdf(file_path, pages=page_str, flavor='stream')
-            for t in tables:
-                accuracy = t.parsing_report.get('accuracy', 0)
-                if accuracy >= 30:
-                    data = df_to_data(t.df)
-                    if len(data) >= 2:
-                        bbox = t._bbox if hasattr(t, '_bbox') else (0, 0, 0, 0)
-                        if bbox and bbox != (0, 0, 0, 0):
-                            cx0, cy0, cx1, cy1 = bbox
-                            px0 = cx0
-                            py0 = page_height - cy1
-                            px1 = cx1
-                            py1 = page_height - cy0
-                            bbox = (px0, py0, px1, py1)
-                        results.append({
-                            'data': data,
-                            'accuracy': accuracy,
-                            'bbox': bbox,
-                            'flavor': 'stream',
-                        })
-
-        if results:
-            logger.info(
-                "Camelot page %d: found %d table(s), accuracies: %s",
-                page_num + 1, len(results),
-                [f"{r['accuracy']:.1f}% ({r['flavor']})" for r in results],
-            )
-
     except Exception as e:
         logger.warning(
-            "Camelot failed on page %d: %s — will fall back to PyMuPDF",
+            "Camelot lattice failed on page %d: %s",
             page_num + 1, e,
         )
-        return []
+
+    # 2. Try stream flavor
+    try:
+        tables = camelot.read_pdf(file_path, pages=page_str, flavor='stream')
+        for t in tables:
+            accuracy = t.parsing_report.get('accuracy', 0)
+            if accuracy >= 30:
+                data = df_to_data(t.df)
+                if len(data) >= 2:
+                    bbox = t._bbox if hasattr(t, '_bbox') else (0, 0, 0, 0)
+                    if bbox and bbox != (0, 0, 0, 0):
+                        cx0, cy0, cx1, cy1 = bbox
+                        px0 = cx0
+                        py0 = page_height - cy1
+                        px1 = cx1
+                        py1 = page_height - cy0
+                        bbox = (px0, py0, px1, py1)
+                    all_candidates.append({
+                        'data': data,
+                        'accuracy': accuracy,
+                        'bbox': bbox,
+                        'flavor': 'stream',
+                    })
+    except Exception as e:
+        logger.warning(
+            "Camelot stream failed on page %d: %s",
+            page_num + 1, e,
+        )
+
+    # 3. Deduplicate by bbox overlap (keep higher accuracy)
+    def bbox_overlap(boxA, boxB):
+        ax0, ay0, ax1, ay1 = boxA
+        bx0, by0, bx1, by1 = boxB
+        
+        # Calculate intersection box
+        ix0 = max(ax0, bx0)
+        iy0 = max(ay0, by0)
+        ix1 = min(ax1, bx1)
+        iy1 = min(ay1, by1)
+        
+        if ix1 <= ix0 or iy1 <= iy0:
+            return 0.0
+        
+        intersection_area = (ix1 - ix0) * (iy1 - iy0)
+        areaA = (ax1 - ax0) * (ay1 - ay0)
+        areaB = (bx1 - bx0) * (by1 - by0)
+        
+        min_area = min(areaA, areaB)
+        if min_area <= 0:
+            return 0.0
+            
+        return intersection_area / min_area
+
+    # Sort candidates by accuracy descending
+    sorted_candidates = sorted(all_candidates, key=lambda x: x['accuracy'], reverse=True)
+    results = []
+    for c in sorted_candidates:
+        c_bbox = c['bbox']
+        overlap_found = False
+        if c_bbox and c_bbox != (0, 0, 0, 0):
+            for r in results:
+                r_bbox = r['bbox']
+                if r_bbox and r_bbox != (0, 0, 0, 0):
+                    if bbox_overlap(c_bbox, r_bbox) > 0.5:
+                        overlap_found = True
+                        break
+        if not overlap_found:
+            results.append(c)
+
+    # Restore top-to-bottom spatial sorting for results
+    results.sort(key=lambda x: (x['bbox'][1] if x['bbox'] else 0, x['bbox'][0] if x['bbox'] else 0))
+
+    if results:
+        logger.info(
+            "Camelot page %d: found %d table(s), accuracies: %s",
+            page_num + 1, len(results),
+            [f"{r['accuracy']:.1f}% ({r['flavor']})" for r in results],
+        )
 
     return results
 
@@ -465,6 +508,8 @@ def _extract_pdf(file_path: str) -> list[dict]:
                     logger.info(
                         "PDF page %d: no text — running OCR pipeline", page_num + 1
                     )
+                    from ocr_service.preprocessing.image_processor import pdf_page_to_image
+                    from ocr_service.pipeline import run_ocr_on_image
                     img    = pdf_page_to_image(file_path, page_num=page_num, dpi=200)
                     result = run_ocr_on_image(img, page_num=page_num + 1, deskew=True)
 
@@ -506,6 +551,7 @@ def _extract_image(file_path: str) -> list[dict]:
         logger.warning("Image OCR is disabled — cannot extract text from image.")
         return []
 
+    from ocr_service.pipeline import run_ocr_on_image
     img    = Image.open(file_path).convert("RGB")
     result = run_ocr_on_image(img, page_num=1, deskew=True)
 

@@ -86,6 +86,9 @@ CREATE INDEX IF NOT EXISTS role_domain_id_idx ON rag_graph."Role" (ag_catalog.ag
 CREATE INDEX IF NOT EXISTS location_domain_id_idx ON rag_graph."Location" (ag_catalog.agtype_access_operator(properties, '"domain_id"'::agtype));
 CREATE INDEX IF NOT EXISTS skill_domain_id_idx ON rag_graph."Skill" (ag_catalog.agtype_access_operator(properties, '"domain_id"'::agtype));
 
+-- Reset search path to public for standard relational tables
+SET search_path = public, ag_catalog;
+
 -- 5. Custom Enums
 DO $$ BEGIN
     CREATE TYPE domain_status AS ENUM ('active', 'archived');

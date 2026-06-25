@@ -1,5 +1,6 @@
 import sys
 import importlib.util
+import time
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -44,6 +45,7 @@ evaluation_app = load_service_app("evaluation_main", "evaluation-service")
 async def monolith_lifespan(app: FastAPI):
     # --- STARTUP ---
     print("\n[Monolith] Starting services lifespan...")
+    app.state.models_ready = False
     
     # 1. Domain Startup
     sys.path.insert(0, str(ROOT / "services" / "domain-service"))
@@ -73,12 +75,26 @@ async def monolith_lifespan(app: FastAPI):
         if ret_settings.RETRIEVAL_WARMUP_ON_START:
             from services.embedding import get_embedding_service
             from services.reranker import get_reranker_service
+            
             if ret_settings.WARMUP_EMBEDDING:
-                print("  [Retrieval] Warming up embeddings...")
-                await get_embedding_service().warmup()
-            if ret_settings.WARMUP_RERANKER:
-                print("  [Retrieval] Warming up reranker...")
-                await get_reranker_service().warmup()
+                print("  [Retrieval] Loading embedding model (may take 10-30s on CPU)...")
+                t0 = time.perf_counter()
+                try:
+                    await get_embedding_service().warmup()
+                    print(f"  [Retrieval] Embedding model loaded in {time.perf_counter() - t0:.1f}s")
+                except Exception as e:
+                    print(f"  [Retrieval] ERROR: Embedding warmup failed: {e}")
+                    
+            if ret_settings.WARMUP_RERANKER and ret_settings.ENABLE_RERANKER:
+                print("  [Retrieval] Loading reranker model (may take 10-30s on CPU)...")
+                t0 = time.perf_counter()
+                try:
+                    await get_reranker_service().warmup()
+                    print(f"  [Retrieval] Reranker model loaded in {time.perf_counter() - t0:.1f}s")
+                except Exception as e:
+                    print(f"  [Retrieval] ERROR: Reranker warmup failed: {e}")
+    except Exception as e:
+        print(f"  [Retrieval] ERROR: Warmup configuration/loading failed: {e}")
     finally:
         sys.path.remove(str(ROOT / "services" / "retrieval-service"))
 
@@ -104,6 +120,7 @@ async def monolith_lifespan(app: FastAPI):
     finally:
         sys.path.remove(str(ROOT / "services" / "evaluation-service"))
 
+    app.state.models_ready = True
     print("[Monolith] Startup complete.\n")
     yield
 
@@ -189,4 +206,7 @@ finally:
 
 @app.get("/health", tags=["health"])
 async def root_health():
-    return {"status": "ok", "service": "monolith-service"}
+    status = "ok"
+    if hasattr(app.state, "models_ready") and not app.state.models_ready:
+        status = "warming_up"
+    return {"status": status, "service": "monolith-service"}

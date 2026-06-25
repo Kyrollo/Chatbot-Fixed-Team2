@@ -50,59 +50,19 @@ def _resolve_model_name() -> str:
 
 def get_model() -> Any:
     """
-    Returns the shared SentenceTransformer instance.
+    Returns the shared ONNXEmbeddingClient instance.
     Loaded once on first call (when the first document arrives), then
-    cached for the worker lifetime. PyTorch is NOT loaded at Celery
-    startup — only when this function is first called.
-
-    WHY lazy import?
-    ──────────────────────────────────────────────────────────────────
-    sentence_transformers imports torch at module level, which loads
-    ~3 GB of DLLs (torch_python.dll etc.). On Windows, loading these
-    while multiple other services are also starting exhausts the paging
-    file, causing [WinError 1455] in the worker and cascading
-    MemoryErrors in sibling processes (e.g. retrieval-service).
-    Deferring the import until the first document is processed means the
-    worker is idle and other services are already settled by then.
-
-    WHY HF_HUB_OFFLINE + TRANSFORMERS_OFFLINE?
-    ──────────────────────────────────────────────────────────────────
-    On Windows, Transformer.__init__ calls find_adapter_config_file which
-    enters cached_file → cached_files in transformers/utils/hub.py.  That
-    network-probing call stack is deep enough (C→Python callbacks) to exceed
-    Python's recursion limit (set to 10 000 by hf_env.py), raising:
-        RecursionError: maximum recursion depth exceeded while calling a Python object
-    Setting those env vars (done in hf_env.py before any import) makes hub
-    utilities return immediately without network access.
-
-    WHY explicit modules instead of SentenceTransformer(model_name)?
-    ──────────────────────────────────────────────────────────────────
-    intfloat/multilingual-e5-small does not ship a sentence_bert_config.json,
-    so sentence-transformers would fall back to another internal
-    SentenceTransformer() call, adding even more recursion depth.
-    Passing modules=[Transformer, Pooling] directly skips that path.
-
-    NOTE: do NOT pass config_args={"local_files_only": True} — that makes
-    AutoConfig look for a literal directory named "intfloat/multilingual-e5-small"
-    on disk instead of the HuggingFace cache, causing an OSError.
+    cached for the worker lifetime.
     """
     global _model
     if _model is None:
         with _model_lock:
             if _model is None:
                 resolved_model_name = _resolve_model_name()
-                print(f"Loading embedding model: {resolved_model_name}...")
-                # Lazy imports — torch loads here, not at Celery startup.
-                from sentence_transformers import SentenceTransformer          # noqa: PLC0415
-                from sentence_transformers import models as st_models          # noqa: PLC0415
-
-                transformer = st_models.Transformer(resolved_model_name)
-                pooling = st_models.Pooling(
-                    transformer.get_word_embedding_dimension(),
-                    pooling_mode_mean_tokens=True,
-                )
-                _model = SentenceTransformer(modules=[transformer, pooling])
-                print("Model loaded")
+                print(f"Loading embedding model in ONNX Runtime: {resolved_model_name}...")
+                from tasks.onnx_client import ONNXEmbeddingClient
+                _model = ONNXEmbeddingClient(resolved_model_name)
+                print("Model loaded (ONNX)")
     return _model
 
 
@@ -137,18 +97,5 @@ def embed_chunks(chunks: list[dict]) -> list[dict]:
         print("  No chunks to embed")
 
     print(f"  Embedded {len(chunks)} chunks — dim={EMBEDDING_DIM}")
-
-    # Dynamic Model Offloading: unload model and trigger GC to save RAM
-    global _model
-    if _model is not None:
-        _model = None
-        import gc
-        gc.collect()
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except ImportError:
-            pass
 
     return chunks

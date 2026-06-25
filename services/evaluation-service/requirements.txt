@@ -1,0 +1,84 @@
+# evaluation-service/requirements.txt
+# Complete, standalone dependency list — installing this alone in a fresh
+# venv is enough to run every part of the service (FastAPI app, Celery
+# worker, Celery Beat).
+#
+# FIX APPLIED (RAGAS judge crashing with circular-import / API-mismatch
+# errors):
+#   tasks/ragas_judge.py was rewritten to target the REAL API of the
+#   ragas version actually installed here (ragas==0.4.3), instead of the
+#   old API (`from ragas import evaluate`, `from ragas.metrics import
+#   faithfulness`, `from datasets import Dataset`) that ragas 0.4 removed
+#   entirely — see the official migration guide:
+#   https://docs.ragas.io/en/stable/howtos/migrations/migrate_from_v03_to_v04/
+#
+#   The new code uses:
+#     - ragas.metrics.collections.<MetricName> classes (Faithfulness,
+#       AnswerRelevancy, ContextPrecisionWithReference, ContextRecall,
+#       ContextEntityRecall, AnswerCorrectness, SemanticSimilarity)
+#     - await metric.ascore(**kwargs) -> MetricResult (.value / .reason)
+#     - ragas.llms.llm_factory(model, provider="groq", client=Groq(...))
+#       for the judge LLM, using the native `groq` Python client instead
+#       of the old LiteLLM + instructor indirection
+#     - ragas.embeddings.huggingface_provider.HuggingFaceEmbeddings,
+#       unchanged from before — this part of the API didn't move
+#
+#   Because the code now matches the installed package version exactly,
+#   there is no longer any need to pin `datasets` to an old release to
+#   dodge an incompatible import path — `datasets` is only a transitive
+#   dependency of `ragas` now, not imported directly by this project's
+#   code, so it's left unpinned and resolved by pip/ragas as appropriate.
+
+# ── Web framework ────────────────────────────────────────────────────────
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic-settings==2.7.0
+python-dotenv==1.0.1
+httpx==0.28.1
+
+# ── Celery + Redis (batch job + scheduler) ──────────────────────────────────
+celery==5.4.0
+redis==5.2.1
+
+# ── Database ─────────────────────────────────────────────────────────────
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+
+# ── RAGAS — full metric suite, wired in and on by default (not optional).
+# This is the version tasks/ragas_judge.py is actually written against
+# (collections-based metrics, llm_factory, MetricResult). Do NOT downgrade
+# without rewriting ragas_judge.py back to the old API — and do NOT bump
+# to a later 0.4.x/0.5+ without checking ragas's changelog for further
+# collections-API changes first.
+ragas==0.4.3
+
+# Native Groq client — patched via instructor.from_groq() (see
+# tasks/ragas_judge.py's _get_ragas_llm for why this is done manually
+# instead of relying on ragas.llms.llm_factory's auto-detection, which
+# misidentifies a raw groq.Groq client and fails with "'Groq' object has
+# no attribute 'messages'"), then passed into
+# ragas.llms.llm_factory(adapter="instructor") already-patched.
+groq
+instructor
+
+# CRITICAL PIN — tested and confirmed required.
+# `pip install ragas` alone pulls the latest langchain-community, which
+# has removed langchain_community.chat_models.vertexai. ragas (every
+# version, including 0.4.3 and even much older 0.2.x releases — this was
+# verified directly, not assumed) still does
+# `from langchain_community.chat_models.vertexai import ChatVertexAI`
+# unconditionally at import time, even if you never use Vertex AI at all.
+# Without this exact pin, `import ragas` crashes immediately with:
+#   ModuleNotFoundError: No module named
+#   'langchain_community.chat_models.vertexai'
+langchain-community==0.3.27
+
+# RAGAS's embeddings-based metrics (answer_relevancy, answer_similarity /
+# SemanticSimilarity, context_entity_recall) need sentence-transformers —
+# this is what actually runs intfloat/multilingual-e5-small locally under
+# HuggingFaceEmbeddings(use_api=False).
+sentence-transformers==3.3.1
+
+# ── Observability — same instrumentator used in other services in this project
+prometheus-fastapi-instrumentator==7.0.0
+prometheus-client==0.21.1

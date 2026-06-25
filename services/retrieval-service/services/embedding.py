@@ -116,12 +116,18 @@ class EmbeddingService:
         self._model = None
         self._lock = asyncio.Lock()
 
+    @property
+    def is_ready(self) -> bool:
+        return self._model is not None
+
     def _load_model(self) -> None:
+        import time
+        t0 = time.perf_counter()
         model_path = _validate_model_path(settings.EMBEDDING_MODEL)
-        logger.info("Loading embedding model: %s (exists=%s)", model_path, model_path.exists())
-        from sentence_transformers import SentenceTransformer  # noqa: PLC0415
-        self._model = SentenceTransformer(str(model_path), local_files_only=True)
-        logger.info("Embedding model ready.")
+        logger.info("Loading embedding model in ONNX Runtime: %s (exists=%s)", model_path, model_path.exists())
+        from services.onnx_client import ONNXEmbeddingClient
+        self._model = ONNXEmbeddingClient(str(model_path))
+        logger.info("Embedding model ready (ONNX). (took %.2fs)", time.perf_counter() - t0)
 
     async def warmup(self) -> None:
         if self._model is None:
@@ -137,7 +143,6 @@ class EmbeddingService:
             self._model.encode,
             f"query: {query}",
             normalize_embeddings=True,
-            show_progress_bar=False,
         )
         return vector.tolist()
 

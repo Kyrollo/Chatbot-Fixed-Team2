@@ -180,7 +180,8 @@ class GraphRetriever(BaseRetriever):
                     query_entities = [
                         normalize_query_text(vertex.name)
                         for vertex in vertices
-                        if normalize_query_text(vertex.name) and normalize_query_text(vertex.name) in normalized_query
+                        if normalize_query_text(vertex.name)
+                        and _token_overlap(normalize_query_text(vertex.name), normalized_query) >= 0.25
                     ][:8]
 
                 diagnostics["query_entities"] = query_entities
@@ -205,8 +206,25 @@ class GraphRetriever(BaseRetriever):
                                 candidate_matches.append((score, query_entity, vertex, candidate))
 
                 if not candidate_matches:
-                    diagnostics["skip_reason"] = "query_entities_found_but_no_graph_match"
-                    return [], diagnostics
+                    # Second pass with relaxed threshold for content-word fallback entities
+                    relaxed_threshold = min(settings.GRAPH_ENTITY_MATCH_THRESHOLD, 0.3)
+                    for query_entity in query_entities:
+                        for vertex in vertices:
+                            candidate_names = {vertex.normalized_name, normalize_query_text(vertex.name)}
+                            candidate_names.update(normalize_query_text(alias) for alias in vertex.aliases or [])
+                            expanded_candidates = {
+                                alias
+                                for candidate in candidate_names
+                                if candidate
+                                for alias in _expand_aliases(candidate)
+                            }
+                            for candidate in expanded_candidates:
+                                score = _score_match(query_entity, candidate)
+                                if score >= relaxed_threshold:
+                                    candidate_matches.append((score, query_entity, vertex, candidate))
+                    if not candidate_matches:
+                        diagnostics["skip_reason"] = "query_entities_found_but_no_graph_match"
+                        return [], diagnostics
 
                 candidate_matches.sort(key=lambda item: item[0], reverse=True)
                 selected_vertices: list[GraphVertex] = []

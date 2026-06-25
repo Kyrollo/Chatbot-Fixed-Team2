@@ -21,19 +21,32 @@ BEGIN
     END IF;
 END $$;
 
--- 3. Drop all tables
-DROP TABLE IF EXISTS audit_logs CASCADE;
-DROP TABLE IF EXISTS eval_cursor CASCADE;
-DROP TABLE IF EXISTS live_evaluation_cache CASCADE;
-DROP TABLE IF EXISTS moderation_queue CASCADE;
-DROP TABLE IF EXISTS evaluation_logs CASCADE;
-DROP TABLE IF EXISTS rag_query_logs CASCADE;
-DROP TABLE IF EXISTS document_chunks CASCADE;
-DROP TABLE IF EXISTS documents CASCADE;
-DROP TABLE IF EXISTS domain_configs CASCADE;
-DROP TABLE IF EXISTS domain_roles CASCADE;
-DROP TABLE IF EXISTS domains CASCADE;
-DROP TABLE IF EXISTS users CASCADE;
+-- 3. Drop all tables (explicitly qualifying both public and ag_catalog schemas)
+DROP TABLE IF EXISTS public.audit_logs CASCADE;
+DROP TABLE IF EXISTS public.eval_cursor CASCADE;
+DROP TABLE IF EXISTS public.live_evaluation_cache CASCADE;
+DROP TABLE IF EXISTS public.moderation_queue CASCADE;
+DROP TABLE IF EXISTS public.evaluation_logs CASCADE;
+DROP TABLE IF EXISTS public.rag_query_logs CASCADE;
+DROP TABLE IF EXISTS public.document_chunks CASCADE;
+DROP TABLE IF EXISTS public.documents CASCADE;
+DROP TABLE IF EXISTS public.domain_configs CASCADE;
+DROP TABLE IF EXISTS public.domain_roles CASCADE;
+DROP TABLE IF EXISTS public.domains CASCADE;
+DROP TABLE IF EXISTS public.users CASCADE;
+
+DROP TABLE IF EXISTS ag_catalog.audit_logs CASCADE;
+DROP TABLE IF EXISTS ag_catalog.eval_cursor CASCADE;
+DROP TABLE IF EXISTS ag_catalog.live_evaluation_cache CASCADE;
+DROP TABLE IF EXISTS ag_catalog.moderation_queue CASCADE;
+DROP TABLE IF EXISTS ag_catalog.evaluation_logs CASCADE;
+DROP TABLE IF EXISTS ag_catalog.rag_query_logs CASCADE;
+DROP TABLE IF EXISTS ag_catalog.document_chunks CASCADE;
+DROP TABLE IF EXISTS ag_catalog.documents CASCADE;
+DROP TABLE IF EXISTS ag_catalog.domain_configs CASCADE;
+DROP TABLE IF EXISTS ag_catalog.domain_roles CASCADE;
+DROP TABLE IF EXISTS ag_catalog.domains CASCADE;
+DROP TABLE IF EXISTS ag_catalog.users CASCADE;
 
 -- 4. Drop custom enums
 DROP TYPE IF EXISTS domain_status CASCADE;

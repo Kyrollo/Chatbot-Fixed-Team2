@@ -7,7 +7,8 @@ from dataclasses import dataclass
 
 _ENTITY_PATTERNS = [
     r'"([^"]{2,80})"',
-    r"\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)+\b",
+    # Title-case phrase: allow lowercase connector words between capitals
+    r"\b[A-Z][a-z]+(?:(?:\s+(?:of|or|and|for|the|a|an|in|to|with|at|by|on)\s+|\s+)[A-Z][a-z]+)+\b",
     r"\b(?:Form\s+)?[A-Z]{1,3}-?\d{1,4}\b",
     r"\b\d{4}\b",
     r"[\u0600-\u06FF]{2,}(?:\s+[\u0600-\u06FF]{2,}){0,3}",
@@ -34,6 +35,13 @@ _KEYWORD_STOPWORDS = {
     "ما", "هل", "كيف", "متى", "أين", "من", "لماذا",
 }
 
+_CONTENT_STOPWORDS = {
+    "what", "when", "where", "who", "why", "how", "which", "according",
+    "table", "value", "amount", "using", "following", "below", "above",
+    "that", "this", "these", "those", "there", "their", "they",
+    "your", "have", "from", "with", "would", "could", "should",
+}
+
 
 def normalize_query_text(text: str) -> str:
     if not text:
@@ -57,6 +65,19 @@ def extract_query_entities(query: str) -> list[str]:
             normalized = normalize_query_text(value)
             if normalized and normalized not in candidates:
                 candidates.append(normalized)
+
+    # Fallback: extract meaningful content words when regex found nothing
+    if not candidates:
+        for word in query.split():
+            clean = re.sub(r"[^a-zA-Z\u0600-\u06FF\-]", "", word).lower()
+            if (
+                len(clean) > 4
+                and clean not in _CONTENT_STOPWORDS
+                and clean not in _KEYWORD_STOPWORDS
+            ):
+                if clean not in candidates:
+                    candidates.append(clean)
+
     return candidates[:8]
 
 

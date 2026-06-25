@@ -84,7 +84,13 @@ if __name__ == "__main__":
         
     sql_content = setup_sql_path.read_text(encoding="utf-8")
     
-    # 1. Main Relational DB
+    clear_sql_path = ROOT / "migrations" / "clear_db.sql"
+    clear_content = None
+    if clear_sql_path.exists():
+        print(f"Found reset script {clear_sql_path}. Clearing databases first...")
+        clear_content = clear_sql_path.read_text(encoding="utf-8")
+    
+    # Get database URLs
     rel_url = os.getenv("SYNC_DATABASE_URL") or os.getenv("DATABASE_URL")
     if not rel_url:
         from urllib.parse import quote
@@ -95,10 +101,21 @@ if __name__ == "__main__":
         port = os.getenv("POSTGRES_PORT", "5432")
         rel_url = f"postgresql://{user}:{password}@{host}:{port}/{db}"
         
+    age_url = os.getenv("AGE_DATABASE_DSN")
+    
+    # 1. Clear databases if reset script exists
+    if clear_content:
+        run_sql_on_db(rel_url, clear_content, "Relational_Clear")
+        if age_url:
+            rel_normalized = rel_url.replace("postgresql+asyncpg://", "postgresql://")
+            age_normalized = age_url.replace("postgresql+asyncpg://", "postgresql://")
+            if rel_normalized != age_normalized:
+                run_sql_on_db(age_url, clear_content, "Graph_Clear")
+    
+    # 2. Main Relational DB Migration
     run_sql_on_db(rel_url, sql_content, "Relational")
     
-    # 2. Graph DB (Port 5434 usually)
-    age_url = os.getenv("AGE_DATABASE_DSN")
+    # 3. Graph DB Migration (if separate)
     if age_url:
         rel_normalized = rel_url.replace("postgresql+asyncpg://", "postgresql://")
         age_normalized = age_url.replace("postgresql+asyncpg://", "postgresql://")

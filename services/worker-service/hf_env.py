@@ -21,6 +21,17 @@ from __future__ import annotations
 
 import os
 import sys
+import warnings
+
+# Suppress deprecation and mismatch warnings before they are triggered by imports
+warnings.filterwarnings("ignore", message=".*TRANSFORMERS_CACHE.*", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="requests")
+warnings.filterwarnings("ignore", message=".*RequestsDependencyWarning.*")
+warnings.filterwarnings("ignore", message=".*sentencepiece.*byte fallback.*")
+warnings.filterwarnings("ignore", message=".*Asking to truncate to max_length.*")
+
+# Remove the deprecated TRANSFORMERS_CACHE if present — we use HF_HOME exclusively
+os.environ.pop("TRANSFORMERS_CACHE", None)
 
 _MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
 os.environ.setdefault("HF_HOME", os.getenv("HF_HOME", os.path.join(_MODELS_DIR, "huggingface")))
@@ -31,6 +42,9 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 # Skip TorchScript JIT compilation — reduces memory and avoids background threads.
 os.environ.setdefault("PYTORCH_JIT", "0")
+
+# Prevent duplicate library runtime conflicts (e.g. libiomp5md.dll vs libiomp5.dll)
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 # Belt-and-suspenders: raise the limit well above the HF hub call depth.
 # The HF hub stack on Windows can reach ~3 000 frames; 10 000 gives a

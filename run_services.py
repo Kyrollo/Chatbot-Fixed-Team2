@@ -71,11 +71,13 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
     user     = out.get("POSTGRES_USER", "postgres")
     password = quote(out.get("POSTGRES_PASSWORD", "postgres"), safe="")
     db       = out.get("POSTGRES_DB", "domain_db")
-    out["DATABASE_URL"]      = f"postgresql+asyncpg://{user}:{password}@localhost:5432/{db}"
-    out["SYNC_DATABASE_URL"] = f"postgresql://{user}:{password}@localhost:5432/{db}"
+    pg_port  = out.get("POSTGRES_PORT", "5432")
+    out["DATABASE_URL"]      = f"postgresql+asyncpg://{user}:{password}@localhost:{pg_port}/{db}"
+    out["SYNC_DATABASE_URL"] = f"postgresql://{user}:{password}@localhost:{pg_port}/{db}"
 
     if use_redis:
-        out["REDIS_URL"] = "redis://localhost:6379/0"
+        redis_port = out.get("REDIS_PORT", "6379")
+        out["REDIS_URL"] = f"redis://localhost:{redis_port}/0"
         out.pop("SYNC_INGESTION", None)
     else:
         out["REDIS_URL"]        = "memory://"
@@ -83,6 +85,10 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
 
     out["QDRANT_PATH"] = str(ROOT / "data" / "qdrant")
     out.pop("QDRANT_URL", None)
+
+    # ── Apache AGE (graph DB — WSL2 on port 5434) ──
+    out.setdefault("AGE_DATABASE_DSN", "")
+    out.setdefault("AGE_GRAPH_NAME", "rag_graph")
 
     out["DOMAIN_SERVICE_URL"]     = "http://localhost:8000"
     out["INGESTION_SERVICE_URL"]  = "http://localhost:8000"
@@ -96,10 +102,12 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
         p for p in [str(SCRIPTS), out.get("PYTHONPATH", "")] if p
     )
     out.setdefault("PYTHONIOENCODING", "utf-8")
+    out["PYTHONUNBUFFERED"] = "1"
 
     if use_keycloak:
-        out["KEYCLOAK_ISSUER"]      = "http://localhost:8180/realms/rag-system"
-        out["KEYCLOAK_REALM_URL"]   = "http://localhost:8180/realms/rag-system"
+        kc_port = out.get("KEYCLOAK_PORT", "8180")
+        out["KEYCLOAK_ISSUER"]      = f"http://localhost:{kc_port}/realms/rag-system"
+        out["KEYCLOAK_REALM_URL"]   = f"http://localhost:{kc_port}/realms/rag-system"
         out["KEYCLOAK_PUBLIC_KEY"]  = ""
     else:
         from dev_auth import DEV_ISSUER, get_public_key_body  # noqa: PLC0415
@@ -152,6 +160,7 @@ def worker_cmd() -> list[str]:
         PYTHON, "-m", "celery", "-A", "worker", "worker",
         "--loglevel=info", "-Q", "ingestion", "--concurrency=1",
         "-n", "ingestion-worker",
+        "--without-gossip", "--without-mingle", "--without-heartbeat",
     ]
     if os.name == "nt":
         cmd.extend(["--pool=solo"])
@@ -167,8 +176,7 @@ def load_root_env(use_keycloak: bool, use_redis: bool) -> dict[str, str]:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, _, value = line.partition("=")
-            if key.strip() not in env:
-                env[key.strip()] = value.strip()
+            env[key.strip()] = value.strip()
     return apply_local_env(env, use_keycloak=use_keycloak, use_redis=use_redis)
 
 
@@ -198,6 +206,7 @@ def evaluation_worker_cmd() -> list[str]:
         PYTHON, "-m", "celery", "-A", "celery_app", "worker",
         "--loglevel=info", "-Q", "evaluation", "--concurrency=1",
         "-n", "evaluation-worker",
+        "--without-gossip", "--without-mingle", "--without-heartbeat",
     ]
     if os.name == "nt":
         cmd.extend(["--pool=solo"])
@@ -239,7 +248,8 @@ def purge_ingestion_queue() -> None:
     try:
         import redis as redis_lib  # noqa: PLC0415
 
-        r = redis_lib.Redis(host="localhost", port=6379, db=0, socket_timeout=5)
+        redis_port = int(os.getenv("REDIS_PORT", "6379"))
+        r = redis_lib.Redis(host="localhost", port=redis_port, db=0, socket_timeout=5)
         count = r.llen("ingestion")
         # Delete queue + Celery bookkeeping keys for unacknowledged messages
         r.delete("ingestion", "unacked", "unacked_index", "unacked_mutex")
@@ -302,7 +312,8 @@ def main() -> int:
     if use_redis:
         try:
             import redis as redis_lib
-            r = redis_lib.Redis(host="localhost", port=6379, db=0, socket_timeout=5)
+            redis_port = int(os.getenv("REDIS_PORT", "6379"))
+            r = redis_lib.Redis(host="localhost", port=redis_port, db=0, socket_timeout=5)
             r.flushdb()
             print("  Redis database 0 flushed successfully")
             r.close()
@@ -312,12 +323,15 @@ def main() -> int:
     env      = load_root_env(use_keycloak=use_keycloak, use_redis=use_redis)
     services = list(API_SERVICES)
 
+    pg_port = env.get("POSTGRES_PORT", "5432")
+    kc_port = env.get("KEYCLOAK_PORT", "8180")
+    redis_port = env.get("REDIS_PORT", "6379")
     print(f"\n[2/3] Configuration")
     print(f"  Python:     {PYTHON}")
-    print(f"  PostgreSQL: localhost:5432")
+    print(f"  PostgreSQL: localhost:{pg_port}")
     print(f"  Qdrant:     embedded at {env['QDRANT_PATH']}")
-    print(f"  Auth:       {'Keycloak http://localhost:8180' if use_keycloak else 'dev JWT fallback'}")
-    print(f"  Redis:      {'localhost:6379' if use_redis else 'unavailable (sync ingestion + memory cache)'}")
+    print(f"  Auth:       {f'Keycloak http://localhost:{kc_port}' if use_keycloak else 'dev JWT fallback'}")
+    print(f"  Redis:      {f'localhost:{redis_port}' if use_redis else 'unavailable (sync ingestion + memory cache)'}")
     print(f"  OCR:        embedded in worker-service (PaddleOCR + Surya)")
     if not args.worker:
         print(f"  Worker:     disabled (pass --worker to enable Celery ingestion)")
@@ -360,7 +374,8 @@ def main() -> int:
         print("  All processes started. Press Ctrl+C to stop.")
         print("=" * 60)
         if use_keycloak:
-            print("  Keycloak:  http://localhost:8180")
+            kc_port = env.get("KEYCLOAK_PORT", "8180")
+            print(f"  Keycloak:  http://localhost:{kc_port}")
         for svc in services:
             print(f"  API docs:  http://localhost:{svc['port']}/docs")
         if not args.worker:

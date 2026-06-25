@@ -84,24 +84,49 @@ if __name__ == "__main__":
         
     sql_content = sql_path.read_text(encoding="utf-8")
     
-    # 1. Main Relational DB
+    # Collect all candidate database connection URLs
+    db_urls = []
+    
+    # 1. Configured Relational DB
     rel_url = os.getenv("SYNC_DATABASE_URL") or os.getenv("DATABASE_URL")
     if not rel_url:
         from urllib.parse import quote
         user = os.getenv("POSTGRES_USER", "postgres")
-        password = quote(os.getenv("POSTGRES_PASSWORD", "postgres"), safe="")
+        password = quote(os.getenv("POSTGRES_PASSWORD", "1234"), safe="")
         db = os.getenv("POSTGRES_DB", "domain_db")
         host = os.getenv("POSTGRES_HOST", "localhost")
         port = os.getenv("POSTGRES_PORT", "5432")
         rel_url = f"postgresql://{user}:{password}@{host}:{port}/{db}"
-        
-    run_sql_on_db(rel_url, sql_content, "Relational")
+    db_urls.append(rel_url)
     
-    # 2. Graph DB (Port 5434 usually)
+    # 2. Configured Graph DB DSN
     age_url = os.getenv("AGE_DATABASE_DSN")
     if age_url:
-        rel_normalized = rel_url.replace("postgresql+asyncpg://", "postgresql://")
-        age_normalized = age_url.replace("postgresql+asyncpg://", "postgresql://")
-        if rel_normalized != age_normalized:
-            run_sql_on_db(age_url, sql_content, "Graph")
+        db_urls.append(age_url)
+        
+    # 3. Standard fallback ports (5432 and 5434) to guarantee cleanup on both
+    user = os.getenv("POSTGRES_USER", "postgres")
+    from urllib.parse import quote
+    password = quote(os.getenv("POSTGRES_PASSWORD", "1234"), safe="")
+    db = os.getenv("POSTGRES_DB", "domain_db")
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    
+    db_urls.append(f"postgresql://{user}:{password}@{host}:5432/{db}")
+    db_urls.append(f"postgresql://{user}:{password}@{host}:5434/{db}")
+    
+    # Deduplicate candidate URLs based on normalized connection strings
+    seen_normalized = set()
+    unique_urls = []
+    for url in db_urls:
+        normalized = url.replace("postgresql+asyncpg://", "postgresql://")
+        if normalized not in seen_normalized:
+            seen_normalized.add(normalized)
+            unique_urls.append(url)
+            
+    # Run cleanup on each unique database target
+    for url in unique_urls:
+        # Extract port for display
+        host_port = url.partition("@")[-1].partition("/")[0]
+        port = host_port.partition(":")[-1] if ":" in host_port else "5432"
+        run_sql_on_db(url, sql_content, f"Database on port {port}")
 

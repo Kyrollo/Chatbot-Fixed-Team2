@@ -17,6 +17,7 @@ _TABLE_KEYWORDS = [
 def fuse_results(*ranked_lists: list[ChunkResult], k: int = 60, query: str | None = None) -> list[ChunkResult]:
     scores: dict[str, float] = defaultdict(float)
     best_by_chunk: dict[str, ChunkResult] = {}
+    engine_membership: dict[str, set[int]] = defaultdict(set)
 
     # Log what came in from each engine
     for i, ranked in enumerate(ranked_lists):
@@ -36,9 +37,10 @@ def fuse_results(*ranked_lists: list[ChunkResult], k: int = 60, query: str | Non
 
     # Single pass: accumulate RRF score per chunk, apply table boost once,
     # and track the highest-scoring original ChunkResult per chunk_id.
-    for ranked in ranked_lists:
+    for i, ranked in enumerate(ranked_lists):
         for rank, item in enumerate(ranked, start=1):
             scores[item.chunk_id] += 1.0 / (k + rank)
+            engine_membership[item.chunk_id].add(i)
 
             if is_table_q:
                 is_table_nl = "[TABLE_NL]" in item.text or getattr(item, 'chunk_type', '') == 'table_nl'
@@ -75,7 +77,7 @@ def fuse_results(*ranked_lists: list[ChunkResult], k: int = 60, query: str | Non
 
     # Log fusion output
     unique = len(fused)
-    appeared_in_both = sum(1 for s in scores.values() if s > 1.0 / (k + 1))
+    appeared_in_both = sum(1 for ids in engine_membership.values() if len(ids) > 1)
     logger.info(
         "RRF output: %d unique chunks — %d appeared in multiple engines — top 3: %s",
         unique,

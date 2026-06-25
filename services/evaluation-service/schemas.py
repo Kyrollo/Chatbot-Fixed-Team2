@@ -46,6 +46,8 @@ class EvaluationResponse(BaseModel):
     explanation: str
     route_used: str   # "api" (Groq) or "local" (Ollama)
     model: str
+    faithfulness: Optional[float] = None
+    completeness: Optional[float] = None
 
 
 # ----------------------------------------------------------------------

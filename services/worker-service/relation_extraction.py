@@ -38,6 +38,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import random
 
 import httpx
 from dotenv import load_dotenv
@@ -47,11 +49,6 @@ from ontology import RELATION_TYPES
 load_dotenv()
 
 # Matches the env var names already used by retrieval-service/generation-service
-# (see services/generation-service/config.py) for consistency across the
-# project, but read via os.getenv like the rest of worker-service/tasks/process.py
-# rather than pydantic_settings — worker-service has no config.py/Settings
-# class of its own, so this follows its existing plain-os.getenv pattern
-# instead of introducing a new one for just this module.
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -60,6 +57,11 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 # against context size. ~600 words/chunk * 20 chunks ≈ 12k words of
 # source text per call, comfortably within Groq's context window.
 CHUNKS_PER_GROUP = 20
+
+MAX_RETRIES = 3
+BASE_DELAY = 2.0         # seconds between groups
+RETRY_BASE_DELAY = 2.0   # initial retry delay on 429
+GROQ_MAX_INPUT_CHARS = 100_000  # ~25k tokens, well within 131k context
 
 _RELATION_TYPES_STR = ", ".join(RELATION_TYPES)
 
@@ -110,26 +112,27 @@ def _build_user_message(group: list[dict]) -> str | None:
     entity_lines = "\n".join(f'- "{e["text"]}" ({e["label"]})' for e in entities)
     source_text = "\n\n".join(chunk["text"] for chunk in group)
 
+    # Trim if exceeding safe limit
+    if len(source_text) > GROQ_MAX_INPUT_CHARS:
+        source_text = source_text[:GROQ_MAX_INPUT_CHARS]
+        print("  [WARN] Source text trimmed to fit Groq context window")
+
     return (
         f"Entities found in this text:\n{entity_lines}\n\n"
         f"Source text:\n{source_text}"
     )
 
 
-def _call_llm(user_message: str) -> list[dict]:
+def _call_llm(user_message: str, attempt: int = 0) -> list[dict]:
     """
-    Single Groq call. Returns [] on any failure (timeout, bad JSON,
-    network error, missing API key) — relation extraction is additive
-    graph data, not core RAG functionality, so a failed group should
-    not raise and should not block the rest of the document. Mirrors
-    the fallback philosophy in retrieval_router.py.
+    Single Groq call with exponential backoff retry on 429.
     """
     if not GROQ_API_KEY:
         print("  [WARN] GROQ_API_KEY not set — skipping relation extraction for this group")
         return []
 
     try:
-        with httpx.Client(timeout=30.0) as client:
+        with httpx.Client(timeout=60.0) as client:
             resp = client.post(
                 f"{GROQ_BASE_URL.rstrip('/')}/chat/completions",
                 json={
@@ -143,6 +146,21 @@ def _call_llm(user_message: str) -> list[dict]:
                 },
                 headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
             )
+            
+            # Handle 429 explicitly
+            if resp.status_code == 429:
+                if attempt < MAX_RETRIES:
+                    retry_after = float(resp.headers.get("retry-after", 0))
+                    delay = max(retry_after, RETRY_BASE_DELAY * (2 ** attempt))
+                    jitter = random.uniform(0.0, 1.0)
+                    wait = delay + jitter
+                    print(f"  [WARN] Rate limited (429). Retrying in {wait:.1f}s (attempt {attempt+1}/{MAX_RETRIES})")
+                    time.sleep(wait)
+                    return _call_llm(user_message, attempt + 1)
+                else:
+                    print(f"  [WARN] Rate limit exceeded after {MAX_RETRIES} retries")
+                    return []
+
             resp.raise_for_status()
             raw = resp.json()["choices"][0]["message"]["content"].strip()
 
@@ -170,6 +188,17 @@ def _call_llm(user_message: str) -> list[dict]:
             })
         return valid
 
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429 and attempt < MAX_RETRIES:
+            retry_after = float(exc.response.headers.get("retry-after", 0))
+            delay = max(retry_after, RETRY_BASE_DELAY * (2 ** attempt))
+            jitter = random.uniform(0.0, 1.0)
+            wait = delay + jitter
+            print(f"  [WARN] Rate limited (429). Retrying in {wait:.1f}s (attempt {attempt+1}/{MAX_RETRIES})")
+            time.sleep(wait)
+            return _call_llm(user_message, attempt + 1)
+        print(f"  [WARN] Relation extraction LLM call failed for this group (HTTP status error): {exc}")
+        return []
     except Exception as exc:
         print(f"  [WARN] Relation extraction LLM call failed for this group: {exc}")
         return []
@@ -182,20 +211,16 @@ def extract_relations_for_chunks(chunks: list[dict]) -> list[dict]:
 
     Groups chunks (CHUNKS_PER_GROUP at a time, in document order),
     makes one LLM call per group, and returns all triples found across
-    the whole document:
-    [
-        {"subject": "أحمد محمد", "relation": "MANAGES", "object": "مشروع تطوير النظام"},
-        ...
-    ]
-
-    Returns an empty list if no entities were found anywhere in the
-    document (e.g. NER step 5 failed upstream) — not an error.
+    the whole document.
     """
     groups = _group_chunks(chunks, CHUNKS_PER_GROUP)
     print(f"  Extracting relations from {len(chunks)} chunks in {len(groups)} group(s) of up to {CHUNKS_PER_GROUP}...")
 
     all_triples: list[dict] = []
     for i, group in enumerate(groups, start=1):
+        if i > 1:
+            time.sleep(BASE_DELAY)  # Prevent back-to-back requests hitting rate limit
+
         user_message = _build_user_message(group)
         if user_message is None:
             continue  # no entities in this group — nothing to relate
