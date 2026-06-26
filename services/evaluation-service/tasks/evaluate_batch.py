@@ -249,17 +249,25 @@ def evaluate_recent_answers(self):
                     reference=reference,
                 )
             ragas_full    = ragas_result["ragas_full"]
+            # Use answer_relevancy as completeness proxy when answer_correctness
+            # is None (no reference — normal for live traffic). Prevents overall
+            # from being computed on a single metric.
+            completeness_score = (
+                ragas_full.get("answer_correctness")
+                if ragas_full.get("answer_correctness") is not None
+                else ragas_full.get("answer_relevancy")
+            )
             ragas_overall = _overall_score({
                 "faithfulness": ragas_full.get("faithfulness"),
                 "relevance":    ragas_full.get("answer_relevancy"),
-                "completeness": ragas_full.get("answer_correctness"),
+                "completeness": completeness_score,
             })
             ragas_log_id = save_evaluation_result(
                 query_id=query_id,
                 model_used="ragas",
                 faithfulness_score=ragas_full.get("faithfulness"),
                 relevance_score=ragas_full.get("answer_relevancy"),
-                completeness_score=ragas_full.get("answer_correctness"),
+                completeness_score=completeness_score,
                 overall_score=ragas_overall,
                 raw_judge_response=ragas_full.get("raw_response"),
                 ragas_context_precision=ragas_full.get("context_precision"),

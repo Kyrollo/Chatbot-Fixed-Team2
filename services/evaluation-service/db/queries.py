@@ -346,6 +346,7 @@ def fetch_sample_query_ids(sample_rate: float = EVAL_SAMPLE_RATE) -> list[dict]:
                        SELECT 1
                        FROM   evaluation_logs e
                        WHERE  e.query_id = q.id
+                       AND    e.model_used = 'ragas'
                    )
               AND  random() < :sample_rate
             ORDER  BY q.id ASC
@@ -633,6 +634,87 @@ def list_evaluation_logs(limit: int = 50) -> list[dict]:
         session.close()
 
 
+def get_query_detail(query_id: int) -> Optional[dict]:
+    """
+    Full detail for one query: the original question/answer (read straight
+    from rag_query_logs) merged with every judge evaluation recorded
+    against it in evaluation_logs.
+
+    rag_query_logs columns (per generation-service's CREATE TABLE, which is
+    the authoritative source — not this module's earlier docstring, which
+    predates a few columns being added):
+        id, domain_id, user_id, query, answer, llm_route, model,
+        citation_chunk_ids (TEXT[]), retrieval_diagnostics (JSONB),
+        evaluation_status, cache_hit, correlation_id, created_at
+
+    Powers GET /evaluate/logs/{query_id} — the Quality Dashboard's
+    detail drawer (opened by clicking a Query ID row).
+
+    Returns None if no rag_query_logs row exists for this query_id (the
+    router turns that into a 404). A query_id with zero evaluations yet
+    is NOT an error — it returns normally with evaluations=[].
+    """
+    sql = text("""
+        SELECT id, domain_id, user_id, query, answer, llm_route, model,
+               citation_chunk_ids, evaluation_status, cache_hit, created_at
+        FROM   rag_query_logs
+        WHERE  id = :query_id
+    """)
+    with _engine.connect() as conn:
+        row = conn.execute(sql, {"query_id": query_id}).fetchone()
+
+    if row is None:
+        return None
+
+    log_row = dict(row._mapping)
+
+    session = SessionLocal()
+    try:
+        evals = (
+            session.query(EvaluationLog)
+            .filter(EvaluationLog.query_id == query_id)
+            .order_by(EvaluationLog.evaluated_at.asc())
+            .all()
+        )
+        evaluations = [
+            {
+                "id": str(e.id),
+                "query_id": e.query_id,
+                "model_used": e.model_used,
+                "overall_score": e.overall_score,
+                "faithfulness_score": e.faithfulness_score,
+                "relevance_score": e.relevance_score,
+                "completeness_score": e.completeness_score,
+                "ragas_context_precision": e.ragas_context_precision,
+                "ragas_context_recall": e.ragas_context_recall,
+                "ragas_context_entity_recall": e.ragas_context_entity_recall,
+                "ragas_answer_correctness": e.ragas_answer_correctness,
+                "ragas_answer_similarity": e.ragas_answer_similarity,
+                "evaluated_at": e.evaluated_at.isoformat(),
+            }
+            for e in evals
+        ]
+    finally:
+        session.close()
+
+    citation_ids = log_row.get("citation_chunk_ids") or []
+
+    return {
+        "query_id": log_row["id"],
+        "domain_id": log_row.get("domain_id"),
+        "user_id": log_row.get("user_id"),
+        "query": log_row["query"],
+        "answer": log_row["answer"],
+        "llm_route": log_row.get("llm_route"),
+        "model": log_row.get("model"),
+        "citations_count": len(citation_ids),
+        "evaluation_status": log_row.get("evaluation_status"),
+        "cache_hit": log_row.get("cache_hit"),
+        "created_at": log_row["created_at"].isoformat() if log_row.get("created_at") else None,
+        "evaluations": evaluations,
+    }
+
+
 def reset_evaluation_data() -> None:
     """
     Clears all evaluation logs, moderation queue items, audit events, and
@@ -660,4 +742,3 @@ def reset_evaluation_data() -> None:
         raise
     finally:
         session.close()
-

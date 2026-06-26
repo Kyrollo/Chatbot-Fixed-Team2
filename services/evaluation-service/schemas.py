@@ -122,3 +122,26 @@ class ModerationQueueResponse(BaseModel):
     """Response shape for GET /moderation/queue."""
     count: int
     items: list[ModerationItemOut]
+
+
+# ----------------------------------------------------------------------
+# NEW — single query detail (router.py's GET /evaluate/logs/{query_id})
+# Powers the Quality Dashboard's detail drawer. Not used as a FastAPI
+# response_model (the endpoint returns the dict from db.queries straight
+# through, matching the style of the existing /evaluate/logs endpoint) —
+# kept here purely as documentation of the exact response contract.
+# ----------------------------------------------------------------------
+
+class QueryDetailOut(BaseModel):
+    query_id: int
+    domain_id: Optional[str] = None
+    user_id: Optional[str] = None
+    query: str
+    answer: str
+    llm_route: Optional[str] = None
+    model: Optional[str] = None
+    citations_count: int = 0
+    evaluation_status: Optional[str] = None
+    cache_hit: Optional[bool] = None
+    created_at: Optional[datetime] = None
+    evaluations: list[EvaluationLogOut] = Field(default_factory=list)

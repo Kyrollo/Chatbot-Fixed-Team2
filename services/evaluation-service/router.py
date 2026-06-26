@@ -7,6 +7,9 @@ The live POST /evaluate endpoint plus supporting endpoints.
 /evaluate/judge-health    — probe the LLM judge for reachability (Phase 7)
 /evaluate                 — score a (query, answer, context) triple
 /evaluate/logs            — recent evaluation logs
+/evaluate/logs/{query_id} — full detail for one query (question, answer,
+                             every judge evaluation) — Quality Dashboard
+                             detail drawer
 """
 import logging
 import time
@@ -143,6 +146,27 @@ async def get_eval_logs():
         return {"logs": logs}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/logs/{query_id}")
+async def get_query_detail(query_id: int):
+    """
+    Full detail for one query — question, answer, and every judge
+    evaluation recorded for it. Powers the Quality Dashboard's detail
+    drawer (clicking a Query ID row in "Recent Judge Evaluations").
+    """
+    try:
+        from db.queries import get_query_detail as _get_query_detail
+        detail = _get_query_detail(query_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if detail is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No query log found for query_id={query_id}",
+        )
+    return detail
 
 
 @router.post("/reset")

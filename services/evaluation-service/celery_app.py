@@ -23,6 +23,7 @@ load_dotenv(override=False)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+
 # How often Beat fires the evaluation task, in minutes.
 EVAL_SCHEDULE_MINUTES = int(os.getenv("EVAL_SCHEDULE_MINUTES", "30"))
 
@@ -56,7 +57,7 @@ celery_app.conf.update(
 celery_app.conf.beat_schedule = {
     "evaluate-recent-answers-every-30min": {
         "task": "tasks.evaluate_batch.evaluate_recent_answers",
-        "schedule": 30 * 60,  # seconds — set to 300 for testing
+        "schedule": EVAL_SCHEDULE_MINUTES * 60, # seconds — set to 300 for testing
     },
 }
 

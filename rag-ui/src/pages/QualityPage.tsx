@@ -7,6 +7,7 @@ import { BarChart2, ShieldAlert, RefreshCw, CheckCircle, XCircle, Clock, Activit
 import { api, qualityApi } from '../lib/api'
 import { useAuthStore } from '../store/authStore'
 import { cn } from '../lib/utils'
+import QueryDetailDrawer from '../components/quality/QueryDetailDrawer'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -93,6 +94,7 @@ export default function QualityPage() {
   const [error, setError]             = useState('')
   const [modFilter, setModFilter]     = useState<'pending' | 'all'>('pending')
   const [auditFilter, setAuditFilter] = useState<string>('all')
+  const [selectedQueryId, setSelectedQueryId] = useState<number | null>(null)
 
   async function fetchAll() {
     if (!isSystemAdmin) return
@@ -275,8 +277,15 @@ export default function QualityPage() {
                   </thead>
                   <tbody className="divide-y divide-border/20">
                     {evalLogs.slice(0, 20).map((row) => (
-                      <tr key={row.id} className="hover:bg-muted/10 transition">
-                        <td className="py-2 pr-4 font-mono text-muted-foreground">{row.query_id}</td>
+                      <tr
+                        key={row.id}
+                        onClick={() => setSelectedQueryId(row.query_id)}
+                        className={cn(
+                          'hover:bg-muted/10 transition cursor-pointer',
+                          selectedQueryId === row.query_id && 'bg-primary/5'
+                        )}
+                      >
+                        <td className="py-2 pr-4 font-mono text-primary underline-offset-2 hover:underline">{row.query_id}</td>
                         <td className="py-2 pr-4">
                           <span className={cn(
                             'px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase',
@@ -440,6 +449,8 @@ export default function QualityPage() {
           </Section>
         </>
       )}
+
+      <QueryDetailDrawer queryId={selectedQueryId} onClose={() => setSelectedQueryId(null)} />
     </div>
   )
 }

@@ -476,14 +476,24 @@ async def score_with_ragas(query: str, answer: str, contexts: list[str],
 
     # ── Group A — no reference needed ─────────────────────────────────
 
-    # answer_relevancy always runs — it only needs query + answer (+
-    # embeddings, used internally to compare the answer back against the
-    # question).
+    # answer_relevancy always runs.
+    # vibrantlabsai/ragas 0.4.x uses keyword arg 'contexts' (not
+    # 'retrieved_contexts'). We try with contexts first; on TypeError we
+    # fall back to query+answer only so the metric never silently returns 0.0.
     try:
         relevancy = AnswerRelevancy(llm=llm, embeddings=embeddings)
-        value, reason = await _ascore_metric(
-            relevancy, user_input=query, response=answer,
-        )
+        relevancy_contexts = contexts if has_context else [answer]
+        try:
+            value, reason = await _ascore_metric(
+                relevancy,
+                user_input=query,
+                response=answer,
+                contexts=relevancy_contexts,
+            )
+        except TypeError:
+            value, reason = await _ascore_metric(
+                relevancy, user_input=query, response=answer,
+            )
         output["answer_relevancy"] = value
         reasons["answer_relevancy"] = reason
     except Exception as exc:

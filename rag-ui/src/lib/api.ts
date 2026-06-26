@@ -152,6 +152,11 @@ export const qualityApi = {
   // Judge health status
   judgeHealth: () => api.get<any>('/evaluate/judge-health'),
 
+  // Full detail for one query: question, answer, citations count, and every
+  // judge evaluation recorded for that query_id. Backend endpoint needed —
+  // see note in QueryDetailDrawer.tsx.
+  queryDetail: (queryId: number) => api.get<any>(`/evaluate/logs/${queryId}`),
+
   // Reset database tables
   reset: () => api.post<any>('/evaluate/reset'),
 }
