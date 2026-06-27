@@ -28,7 +28,8 @@ if not _raw_url:
     user = os.getenv("POSTGRES_USER", "postgres")
     password = quote(os.getenv("POSTGRES_PASSWORD", "postgres"), safe="")
     db = os.getenv("POSTGRES_DB", "domain_db")
-    _raw_url = f"postgresql://{user}:{password}@localhost:5432/{db}"
+    pg_port = os.getenv("POSTGRES_PORT", "5432")
+    _raw_url = f"postgresql://{user}:{password}@localhost:{pg_port}/{db}"
 DATABASE_URL = _raw_url.replace("postgresql+asyncpg://", "postgresql://")
 
 _engine = create_engine(DATABASE_URL)
@@ -117,6 +118,12 @@ def index_chunks(chunks: list[dict]) -> int:
     domain_id = chunks[0]["domain_id"]
     _ensure_collection(domain_id)
 
+    # Only points with non-null embeddings can be indexed in Qdrant
+    valid_chunks = [c for c in chunks if c.get("embedding") is not None]
+    if not valid_chunks:
+        print(f"  Qdrant: 0/{len(chunks)} chunks had embeddings, skipped vector database indexing.")
+        return 0
+
     points = [
         PointStruct(
             id=_chunk_id_to_int(chunk["chunk_id"]),
@@ -133,7 +140,7 @@ def index_chunks(chunks: list[dict]) -> int:
                 "filename":    chunk.get("filename", ""),
             },
         )
-        for chunk in chunks
+        for chunk in valid_chunks
     ]
 
     batch_size = 100
@@ -148,7 +155,7 @@ def index_chunks(chunks: list[dict]) -> int:
     finally:
         client.close()
 
-    print(f"  Qdrant: indexed {total}/{len(chunks)} chunks into '{domain_id}'")
+    print(f"  Qdrant: indexed {total}/{len(chunks)} chunks into '{domain_id}' (skipped {len(chunks) - len(valid_chunks)} chunks without embedding)")
     return total
 
 
@@ -160,6 +167,9 @@ def _chunk_id_to_int(chunk_id: str) -> int:
 # ──────────────────────────────────────────────────────────────────────────────
 # PostgreSQL full-text indexing (for BM25 retrieval)
 # ──────────────────────────────────────────────────────────────────────────────
+
+_TSVEC_LANG = os.getenv("TSVEC_LANGUAGE", "simple")
+
 
 def index_chunks_postgres(chunks: list[dict]) -> int:
     """
@@ -180,10 +190,10 @@ def index_chunks_postgres(chunks: list[dict]) -> int:
                         (id, document_id, domain_id, page_num, chunk_index, text, source_type, chunk_type, filename, search_vec)
                     VALUES
                         (:id, :document_id, :domain_id, :page_num, :chunk_index, :text, :source_type, :chunk_type, :filename,
-                         to_tsvector('simple', :text))
+                         to_tsvector(:tsvec_lang, :text))
                     ON CONFLICT (id) DO UPDATE SET
                         text        = EXCLUDED.text,
-                        search_vec  = to_tsvector('simple', EXCLUDED.text),
+                        search_vec  = to_tsvector(:tsvec_lang, EXCLUDED.text),
                         page_num    = EXCLUDED.page_num,
                         chunk_index = EXCLUDED.chunk_index,
                         source_type = EXCLUDED.source_type,
@@ -200,6 +210,7 @@ def index_chunks_postgres(chunks: list[dict]) -> int:
                     "source_type": chunk.get("source_type", "pdf"),
                     "chunk_type":  chunk.get("chunk_type", "text"),
                     "filename":    chunk.get("filename", ""),
+                    "tsvec_lang":  _TSVEC_LANG,
                 },
             )
         conn.commit()

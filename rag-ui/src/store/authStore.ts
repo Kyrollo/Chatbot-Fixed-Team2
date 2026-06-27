@@ -5,14 +5,32 @@ import { jwtDecode } from 'jwt-decode'
 export type RealmRole = 'system_admin' | 'domain_admin' | 'contributor' | 'reader' | string
 
 interface DecodedToken {
+  sub?: string
   preferred_username?: string
   email?: string
   realm_access?: { roles: string[] }
+  resource_access?: Record<string, { roles?: string[] }>
   exp?: number
+}
+
+function extractAllRoles(decoded: DecodedToken): RealmRole[] {
+  const roles: string[] = []
+  if (decoded.realm_access?.roles) {
+    roles.push(...decoded.realm_access.roles)
+  }
+  if (decoded.resource_access) {
+    Object.values(decoded.resource_access).forEach((client) => {
+      if (client?.roles) {
+        roles.push(...client.roles)
+      }
+    })
+  }
+  return Array.from(new Set(roles))
 }
 
 interface AuthState {
   token: string | null
+  userId: string | null
   username: string | null
   email: string | null
   roles: RealmRole[]
@@ -25,6 +43,7 @@ interface AuthState {
 
 // Synchronously boot from sessionStorage to prevent flash-to-login on refresh
 const initialToken = sessionStorage.getItem('access_token')
+let initialUserId: string | null = null
 let initialUsername: string | null = null
 let initialEmail: string | null = null
 let initialRoles: RealmRole[] = []
@@ -35,9 +54,10 @@ if (initialToken) {
     const decoded = jwtDecode<DecodedToken>(initialToken)
     // Validate expiration (allow 30s clock skew)
     if (decoded.exp && decoded.exp * 1000 > Date.now() - 30_000) {
+      initialUserId = decoded.sub ?? null
       initialUsername = decoded.preferred_username ?? null
       initialEmail = decoded.email ?? null
-      initialRoles = decoded.realm_access?.roles ?? []
+      initialRoles = extractAllRoles(decoded)
       initialIsSystemAdmin = initialRoles.includes('system_admin')
     } else {
       sessionStorage.removeItem('access_token')
@@ -53,9 +73,10 @@ function decodeAndSet(token: string, set: (s: Partial<AuthState>) => void): bool
     if (decoded.exp && decoded.exp * 1000 < Date.now() - 30_000) {
       return false
     }
-    const roles = decoded.realm_access?.roles ?? []
+    const roles = extractAllRoles(decoded)
     set({
       token,
+      userId: decoded.sub ?? null,
       username: decoded.preferred_username ?? null,
       email: decoded.email ?? null,
       roles,
@@ -69,6 +90,7 @@ function decodeAndSet(token: string, set: (s: Partial<AuthState>) => void): bool
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   token: initialToken ? (sessionStorage.getItem('access_token') ? initialToken : null) : null,
+  userId: initialUserId,
   username: initialUsername,
   email: initialEmail,
   roles: initialRoles,
@@ -85,7 +107,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   logout: () => {
     sessionStorage.removeItem('access_token')
-    set({ token: null, username: null, email: null, roles: [], isSystemAdmin: false })
+    set({ token: null, userId: null, username: null, email: null, roles: [], isSystemAdmin: false })
   },
 
   init: () => {
@@ -94,7 +116,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const ok = decodeAndSet(token, set)
     if (!ok) {
       sessionStorage.removeItem('access_token')
-      set({ token: null, username: null, email: null, roles: [], isSystemAdmin: false })
+      set({ token: null, userId: null, username: null, email: null, roles: [], isSystemAdmin: false })
     }
   },
 

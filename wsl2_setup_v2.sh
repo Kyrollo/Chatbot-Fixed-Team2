@@ -123,7 +123,7 @@ echo "🔐 Setting postgres password..."
 
 # FIX: matches the existing PostgreSQL 16 password so the .env
 # doesn't need two different credentials for two Postgres instances.
-sudo -u postgres psql -c "ALTER USER postgres PASSWORD '55555';"
+sudo -u postgres psql -c "ALTER USER postgres PASSWORD '1234';"
 
 # ─────────────────────────────
 # 10. Enable AGE

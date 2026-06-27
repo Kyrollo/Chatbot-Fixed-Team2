@@ -3,10 +3,11 @@
 // Shows: Judge LLM scores, audit log, moderation queue
 
 import { useEffect, useState } from 'react'
-import { BarChart2, ShieldAlert, RefreshCw, CheckCircle, XCircle, Clock, Activity } from 'lucide-react'
-import { api } from '../lib/api'
+import { BarChart2, ShieldAlert, RefreshCw, CheckCircle, XCircle, Clock, Activity, Download, Trash2 } from 'lucide-react'
+import { api, qualityApi } from '../lib/api'
 import { useAuthStore } from '../store/authStore'
 import { cn } from '../lib/utils'
+import QueryDetailDrawer from '../components/quality/QueryDetailDrawer'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -93,6 +94,7 @@ export default function QualityPage() {
   const [error, setError]             = useState('')
   const [modFilter, setModFilter]     = useState<'pending' | 'all'>('pending')
   const [auditFilter, setAuditFilter] = useState<string>('all')
+  const [selectedQueryId, setSelectedQueryId] = useState<number | null>(null)
 
   async function fetchAll() {
     if (!isSystemAdmin) return
@@ -109,6 +111,38 @@ export default function QualityPage() {
       setAuditLogs(auditRes.logs ?? [])
     } catch (e: any) {
       setError(e.message ?? 'Failed to load quality data')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function exportQualityData() {
+    const data = {
+      evaluationLogs: evalLogs,
+      moderationQueue: modItems,
+      auditLogs: auditLogs,
+      exportedAt: new Date().toISOString(),
+    }
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `quality_data_${new Date().toISOString().slice(0, 10)}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  async function resetQualityData() {
+    if (!window.confirm("Are you sure you want to reset all quality and logs data? This will clear all evaluation logs, moderation queue items, and audit trail logs, and reset evaluation cursor sequence.")) return
+    setLoading(true)
+    try {
+      await qualityApi.reset()
+      alert("Quality data and logs reset successfully.")
+      await fetchAll()
+    } catch (err: any) {
+      alert(`Reset failed: ${err.message}`)
     } finally {
       setLoading(false)
     }
@@ -162,12 +196,30 @@ export default function QualityPage() {
             Judge LLM scores, moderation queue, and audit trail.
           </p>
         </div>
-        <button
-          onClick={fetchAll}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-card/50 hover:bg-card text-xs transition"
-        >
-          <RefreshCw size={14} className={cn(loading && 'animate-spin')} /> Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {isSystemAdmin && (evalLogs.length > 0 || modItems.length > 0 || auditLogs.length > 0) && (
+            <button
+              onClick={exportQualityData}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-card/50 hover:bg-card text-xs transition text-muted-foreground hover:text-foreground"
+            >
+              <Download size={14} /> Export Quality Data
+            </button>
+          )}
+          {isSystemAdmin && (
+            <button
+              onClick={resetQualityData}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/20 bg-red-500/5 hover:bg-red-500/15 text-xs transition text-red-400 font-semibold"
+            >
+              <Trash2 size={14} /> Reset Quality Data
+            </button>
+          )}
+          <button
+            onClick={fetchAll}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-card/50 hover:bg-card text-xs transition"
+          >
+            <RefreshCw size={14} className={cn(loading && 'animate-spin')} /> Refresh
+          </button>
+        </div>
       </div>
 
       {/* Non-admin guard */}
@@ -225,8 +277,15 @@ export default function QualityPage() {
                   </thead>
                   <tbody className="divide-y divide-border/20">
                     {evalLogs.slice(0, 20).map((row) => (
-                      <tr key={row.id} className="hover:bg-muted/10 transition">
-                        <td className="py-2 pr-4 font-mono text-muted-foreground">{row.query_id}</td>
+                      <tr
+                        key={row.id}
+                        onClick={() => setSelectedQueryId(row.query_id)}
+                        className={cn(
+                          'hover:bg-muted/10 transition cursor-pointer',
+                          selectedQueryId === row.query_id && 'bg-primary/5'
+                        )}
+                      >
+                        <td className="py-2 pr-4 font-mono text-primary underline-offset-2 hover:underline">{row.query_id}</td>
                         <td className="py-2 pr-4">
                           <span className={cn(
                             'px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase',
@@ -390,6 +449,8 @@ export default function QualityPage() {
           </Section>
         </>
       )}
+
+      <QueryDetailDrawer queryId={selectedQueryId} onClose={() => setSelectedQueryId(null)} />
     </div>
   )
 }

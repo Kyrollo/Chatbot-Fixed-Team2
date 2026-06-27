@@ -43,49 +43,41 @@ def _issuer_candidates() -> list[str]:
 
 
 @lru_cache
-def _get_public_key() -> str:
+def _get_public_key() -> str | None:
     if settings.KEYCLOAK_PUBLIC_KEY.strip():
         return _build_public_key(settings.KEYCLOAK_PUBLIC_KEY)
 
     try:
-        with urlopen(settings.KEYCLOAK_REALM_URL, timeout=5) as response:
+        with urlopen(settings.KEYCLOAK_REALM_URL, timeout=3) as response:
             realm_data = json.load(response)
-    except URLError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "Unable to fetch Keycloak realm metadata. Set KEYCLOAK_PUBLIC_KEY "
-                f"or make KEYCLOAK_REALM_URL reachable. Details: {exc}"
-            ),
-        ) from exc
-
-    public_key = realm_data.get("public_key")
-    if not public_key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Keycloak realm metadata did not include a public_key value",
-        )
-
-    return _build_public_key(public_key)
+            public_key = realm_data.get("public_key")
+            if public_key:
+                return _build_public_key(public_key)
+    except Exception:
+        pass
+    return None
 
 
 def _decode_token(token: str) -> dict:
     public_key = _get_public_key()
     errors: list[str] = []
 
-    for issuer in _issuer_candidates():
-        try:
-            payload = jwt.decode(
-                token,
-                public_key,
-                algorithms=[settings.KEYCLOAK_ALGORITHM],
-                audience=settings.KEYCLOAK_CLIENT_ID,
-                issuer=issuer,
-                options={"verify_aud": False},  # Keycloak puts client in azp; relax aud
-            )
-            return payload
-        except JWTError as exc:
-            errors.append(f"{issuer}: {exc}")
+    if public_key:
+        for issuer in _issuer_candidates():
+            try:
+                payload = jwt.decode(
+                    token,
+                    public_key,
+                    algorithms=[settings.KEYCLOAK_ALGORITHM],
+                    audience=settings.KEYCLOAK_CLIENT_ID,
+                    issuer=issuer,
+                    options={"verify_aud": False},  # Keycloak puts client in azp; relax aud
+                )
+                return payload
+            except JWTError as exc:
+                errors.append(f"{issuer}: {exc}")
+    else:
+        errors.append("Keycloak realm public key is not available (Keycloak is offline).")
 
     # Fallback for local dev login (minted via dev_auth.py)
     try:

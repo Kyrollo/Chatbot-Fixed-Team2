@@ -42,20 +42,20 @@ Given a user query and its analysis, decide which search engines to use.
 Available engines:
 - vector: semantic / meaning-based search (finds conceptually similar content)
 - bm25:   keyword-based full-text search  (finds exact matching terms)
-- graph:  not yet implemented, always false
+- graph:  entity / relationship graph search
 
 Reply ONLY with valid JSON and nothing else:
 {
   "use_vector": true or false,
   "use_bm25":   true or false,
-  "use_graph":  false
+  "use_graph":  true or false
 }
 
 Rules:
-- use_graph must always be false.
 - DEFAULT: use both vector=true and bm25=true together for best results.
 - Use vector=true, bm25=false ONLY for pure conversational questions (e.g. "how are you", "what is love").
 - Use vector=false, bm25=true ONLY for exact code/ID lookups (e.g. "error code 404", "invoice #1234").
+- Use graph=true when the query is about a named entity, relationship, ownership, reporting lines, policies, forms, or "what is related to X".
 - For ALL other queries including topic searches, named concepts, academic terms, Arabic text → use both: vector=true, bm25=true.
 """
 
@@ -120,17 +120,9 @@ async def route_query(query: str, analysis: QueryAnalysis) -> RoutingDecision:
             logger.warning("LLM returned all engines disabled — using fallback")
             raise ValueError("All engines disabled by LLM decision")
 
-        use_graph = False
-        if settings.AGE_DATABASE_DSN:
-            query_lower = query.lower()
-            relational_keywords = [
-                "manages", "belongs to", "reports to", "owns", "has role", "works on", "has skill", "based at",
-                "who is", "who manages", "reports to", "works in",
-                "من يدير", "يعمل في", "علاقه", "مدير", "وظيفة", "قسم", "مهارات", "تابع ل", "مسؤول عن", "يتبع ل"
-            ]
-            has_rel_keyword = any(kw in query_lower for kw in relational_keywords)
-            if analysis.contains_entities or has_rel_keyword:
-                use_graph = True
+        use_graph = bool(decision.get("use_graph")) and bool(settings.AGE_DATABASE_DSN)
+        if settings.AGE_DATABASE_DSN and (analysis.contains_entities or analysis.relationship_intent):
+            use_graph = True
 
         decision["use_graph"] = use_graph
         v_w, b_w, g_w = _weights_from_decision(decision)
@@ -152,17 +144,7 @@ async def route_query(query: str, analysis: QueryAnalysis) -> RoutingDecision:
 
     except Exception as exc:
         logger.warning("RetrievalRouter LLM call failed (%s) — using fallback", exc)
-        use_graph = False
-        if settings.AGE_DATABASE_DSN:
-            query_lower = query.lower()
-            relational_keywords = [
-                "manages", "belongs to", "reports to", "owns", "has role", "works on", "has skill", "based at",
-                "who is", "who manages", "reports to", "works in",
-                "من يدير", "يعمل في", "علاقه", "مدير", "وظيفة", "قسم", "مهارات", "تابع ل", "مسؤول عن", "يتبع ل"
-            ]
-            has_rel_keyword = any(kw in query_lower for kw in relational_keywords)
-            if analysis.contains_entities or has_rel_keyword:
-                use_graph = True
+        use_graph = bool(settings.AGE_DATABASE_DSN) and (analysis.contains_entities or analysis.relationship_intent)
         return RoutingDecision(
             use_vector=_FALLBACK.use_vector,
             use_bm25=_FALLBACK.use_bm25,

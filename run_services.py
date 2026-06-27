@@ -13,7 +13,6 @@ Usage:
     python run_services.py                 # APIs + infra only (no worker)
     python run_services.py --worker        # also start Celery ingestion worker
     python run_services.py --evaluation    # also start evaluation-service on 8005
-    python run_services.py --eval-worker   # also start evaluation Celery worker + Beat
     python run_services.py --no-reload     # disable uvicorn --reload
     python run_services.py --skip-infra    # if Redis/Keycloak already running
 """
@@ -56,7 +55,6 @@ def resolve_python() -> str:
 
 
 PYTHON = resolve_python()
-EVAL_SERVICE_DIR = ROOT / "services" / "evaluation-service"
 
 
 def ensure_python_runtime() -> None:
@@ -73,19 +71,13 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
     user     = out.get("POSTGRES_USER", "postgres")
     password = quote(out.get("POSTGRES_PASSWORD", "postgres"), safe="")
     db       = out.get("POSTGRES_DB", "domain_db")
-    # Infer port from existing DATABASE_URL in .env, fallback to POSTGRES_PORT, then 5433
-    pg_port = out.get("POSTGRES_PORT", "5433")
-    existing_url = out.get("DATABASE_URL", "")
-    if "@localhost:" in existing_url:
-        try:
-            pg_port = existing_url.split("@localhost:")[1].split("/")[0]
-        except Exception:
-            pass
+    pg_port  = out.get("POSTGRES_PORT", "5432")
     out["DATABASE_URL"]      = f"postgresql+asyncpg://{user}:{password}@localhost:{pg_port}/{db}"
     out["SYNC_DATABASE_URL"] = f"postgresql://{user}:{password}@localhost:{pg_port}/{db}"
 
     if use_redis:
-        out["REDIS_URL"] = "redis://localhost:6379/0"
+        redis_port = out.get("REDIS_PORT", "6379")
+        out["REDIS_URL"] = f"redis://localhost:{redis_port}/0"
         out.pop("SYNC_INGESTION", None)
     else:
         out["REDIS_URL"]        = "memory://"
@@ -94,11 +86,15 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
     out["QDRANT_PATH"] = str(ROOT / "data" / "qdrant")
     out.pop("QDRANT_URL", None)
 
-    out["DOMAIN_SERVICE_URL"]     = "http://localhost:8001"
-    out["INGESTION_SERVICE_URL"]  = "http://localhost:8002"
-    out["RETRIEVAL_SERVICE_URL"]  = "http://localhost:8003"
-    out["GENERATION_SERVICE_URL"] = "http://localhost:8004"
-    out["EVALUATION_SERVICE_URL"] = "http://localhost:8005"
+    # ── Apache AGE (graph DB — WSL2 on port 5434) ──
+    out.setdefault("AGE_DATABASE_DSN", "")
+    out.setdefault("AGE_GRAPH_NAME", "rag_graph")
+
+    out["DOMAIN_SERVICE_URL"]     = "http://localhost:8000"
+    out["INGESTION_SERVICE_URL"]  = "http://localhost:8000"
+    out["RETRIEVAL_SERVICE_URL"]  = "http://localhost:8000"
+    out["GENERATION_SERVICE_URL"] = "http://localhost:8000"
+    out["EVALUATION_SERVICE_URL"] = "http://localhost:8000"
     out["OCR_SERVICE_URL"]        = "http://localhost:8006"
     out["UPLOAD_DIR"]             = str(ROOT / "data" / "uploads")
     out.setdefault("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -106,10 +102,12 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
         p for p in [str(SCRIPTS), out.get("PYTHONPATH", "")] if p
     )
     out.setdefault("PYTHONIOENCODING", "utf-8")
+    out["PYTHONUNBUFFERED"] = "1"
 
     if use_keycloak:
-        out["KEYCLOAK_ISSUER"]      = "http://localhost:8180/realms/rag-system"
-        out["KEYCLOAK_REALM_URL"]   = "http://localhost:8180/realms/rag-system"
+        kc_port = out.get("KEYCLOAK_PORT", "8180")
+        out["KEYCLOAK_ISSUER"]      = f"http://localhost:{kc_port}/realms/rag-system"
+        out["KEYCLOAK_REALM_URL"]   = f"http://localhost:{kc_port}/realms/rag-system"
         out["KEYCLOAK_PUBLIC_KEY"]  = ""
     else:
         from dev_auth import DEV_ISSUER, get_public_key_body  # noqa: PLC0415
@@ -118,11 +116,14 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
         out["KEYCLOAK_REALM_URL"]  = DEV_ISSUER
         out["KEYCLOAK_PUBLIC_KEY"] = get_public_key_body()
 
+    num_threads = str(max(2, os.cpu_count() // 2))
     out.setdefault("INTERNAL_API_KEY",    "rag-internal-dev-key-change-in-prod")
-    out.setdefault("OPENBLAS_NUM_THREADS", "1")
-    out.setdefault("OMP_NUM_THREADS",      "1")
-    out.setdefault("MKL_NUM_THREADS",      "1")
-    out.setdefault("NUMEXPR_NUM_THREADS",  "1")
+    out.setdefault("OPENBLAS_NUM_THREADS", num_threads)
+    out.setdefault("OMP_NUM_THREADS",      num_threads)
+    out.setdefault("MKL_NUM_THREADS",      num_threads)
+    out.setdefault("NUMEXPR_NUM_THREADS",  num_threads)
+    # Prevent duplicate OpenMP library loading from crashing the application on Windows
+    out.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
     # Prevent PyTorch from probing/loading CUDA DLLs — saves ~200 MB per process.
     out.setdefault("CUDA_VISIBLE_DEVICES", "")
     out.setdefault("PYTORCH_JIT",          "0")
@@ -130,15 +131,18 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
     out.setdefault("TOKENIZERS_PARALLELISM", "false")
     # Skip PyTorch CUDA memory caching (CPU-only — saves memory overhead).
     out.setdefault("PYTORCH_NO_CUDA_MEMORY_CACHING", "1")
+    # Set PaddleX model source to BOS (Baidu Object Storage) and bypass connectivity checks
+    # to avoid failing downloads from blocked or unreliable Hugging Face / AI Studio endpoints.
+    out.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
+    out.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+    # Enforce Hugging Face offline mode to prevent any online network checks.
+    out.setdefault("HF_HUB_OFFLINE", "1")
+    out.setdefault("TRANSFORMERS_OFFLINE", "1")
     return out
 
 
 API_SERVICES = [
-    {"name": "domain-service",     "dir": ROOT / "services" / "domain-service",     "port": 8001, "app": "main:app"},
-    {"name": "ingestion-service",  "dir": ROOT / "services" / "ingestion-service",  "port": 8002, "app": "main:app"},
-    {"name": "retrieval-service",  "dir": ROOT / "services" / "retrieval-service",  "port": 8003, "app": "main:app"},
-    {"name": "generation-service", "dir": ROOT / "services" / "generation-service", "port": 8004, "app": "main:app"},
-    # ocr-service runs embedded inside worker-service (not a standalone process)
+    {"name": "monolith-service", "dir": ROOT / "services" / "monolith", "port": 8000, "app": "main:app"},
 ]
 
 EVALUATION_SERVICE = {
@@ -155,6 +159,8 @@ def worker_cmd() -> list[str]:
     cmd = [
         PYTHON, "-m", "celery", "-A", "worker", "worker",
         "--loglevel=info", "-Q", "ingestion", "--concurrency=1",
+        "-n", "ingestion-worker",
+        "--without-gossip", "--without-mingle", "--without-heartbeat",
     ]
     if os.name == "nt":
         cmd.extend(["--pool=solo"])
@@ -170,31 +176,8 @@ def load_root_env(use_keycloak: bool, use_redis: bool) -> dict[str, str]:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, _, value = line.partition("=")
-            if key.strip() not in env:
-                env[key.strip()] = value.strip()
+            env[key.strip()] = value.strip()
     return apply_local_env(env, use_keycloak=use_keycloak, use_redis=use_redis)
-
-
-def load_eval_env(base_env: dict[str, str]) -> dict[str, str]:
-    """Load evaluation-service .env on top of the base env, stripping inline comments."""
-    env = dict(base_env)
-    eval_dotenv = EVAL_SERVICE_DIR / ".env"
-    if eval_dotenv.exists():
-        for line in eval_dotenv.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            # Strip inline comments (e.g. "1   # some comment" -> "1")
-            value = value.split("#")[0].strip()
-            key = key.strip()
-            if key:
-                env[key] = value
-    # Always add the evaluation-service dir to PYTHONPATH so judge.py is importable
-    env["PYTHONPATH"] = os.pathsep.join(
-        p for p in [str(EVAL_SERVICE_DIR), env.get("PYTHONPATH", "")] if p
-    )
-    return env
 
 
 def start_uvicorn(service: dict, env: dict[str, str], reload: bool) -> subprocess.Popen:
@@ -218,28 +201,39 @@ def start_worker(env: dict[str, str]) -> subprocess.Popen:
     )
 
 
-def start_eval_worker(base_env: dict[str, str]) -> tuple[subprocess.Popen, subprocess.Popen]:
-    """Start the evaluation Celery worker and Beat scheduler."""
-    eval_env = load_eval_env(base_env)
+def evaluation_worker_cmd() -> list[str]:
+    cmd = [
+        PYTHON, "-m", "celery", "-A", "celery_app", "worker",
+        "--loglevel=info", "-Q", "evaluation", "--concurrency=1",
+        "-n", "evaluation-worker",
+        "--without-gossip", "--without-mingle", "--without-heartbeat",
+    ]
+    if os.name == "nt":
+        cmd.extend(["--pool=solo"])
+    return cmd
 
-    # Use sys.executable (the actual running python) not PYTHON which may resolve to .venv
-    python_exe = sys.executable
 
-    print("  -> eval-worker (Celery, queue: evaluation)")
-    worker = subprocess.Popen(
-        [python_exe, "-m", "celery", "-A", "celery_app", "worker",
-         "--loglevel=info", "--pool=solo", "--queues=evaluation"],
-        cwd=str(EVAL_SERVICE_DIR), env=eval_env,
+def evaluation_beat_cmd() -> list[str]:
+    return [
+        PYTHON, "-m", "celery", "-A", "celery_app", "beat",
+        "--loglevel=info",
+    ]
+
+
+def start_evaluation_worker(env: dict[str, str]) -> subprocess.Popen:
+    print("  -> evaluation-worker (Celery, queue: evaluation)")
+    return subprocess.Popen(
+        evaluation_worker_cmd(), cwd=EVALUATION_SERVICE["dir"], env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
 
-    print("  -> eval-beat  (Celery Beat scheduler)")
-    beat = subprocess.Popen(
-        [python_exe, "-m", "celery", "-A", "celery_app", "beat", "--loglevel=info"],
-        cwd=str(EVAL_SERVICE_DIR), env=eval_env,
+
+def start_evaluation_beat(env: dict[str, str]) -> subprocess.Popen:
+    print("  -> evaluation-beat (Celery Beat)")
+    return subprocess.Popen(
+        evaluation_beat_cmd(), cwd=EVALUATION_SERVICE["dir"], env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
-    return worker, beat
 
 
 def purge_ingestion_queue() -> None:
@@ -254,7 +248,8 @@ def purge_ingestion_queue() -> None:
     try:
         import redis as redis_lib  # noqa: PLC0415
 
-        r = redis_lib.Redis(host="localhost", port=6379, db=0, socket_timeout=5)
+        redis_port = int(os.getenv("REDIS_PORT", "6379"))
+        r = redis_lib.Redis(host="localhost", port=redis_port, db=0, socket_timeout=5)
         count = r.llen("ingestion")
         # Delete queue + Celery bookkeeping keys for unacknowledged messages
         r.delete("ingestion", "unacked", "unacked_index", "unacked_mutex")
@@ -285,16 +280,13 @@ def main() -> int:
         action="store_true",
         help="Also start the Celery ingestion worker (off by default — loads PyTorch/~3 GB DLLs)",
     )
-    parser.add_argument("--evaluation",  action="store_true", help="Also start evaluation-service on port 8005")
-    parser.add_argument("--eval-worker", action="store_true", help="Also start evaluation Celery worker + Beat (auto-enables --evaluation)")
-    parser.add_argument("--no-reload",   action="store_true", help="Disable uvicorn --reload")
-    parser.add_argument("--skip-infra",  action="store_true", help="Skip starting Redis/Keycloak")
+    parser.add_argument("--evaluation", action="store_true", help="Also start evaluation-service on port 8005")
+    parser.add_argument("--no-reload",  action="store_true", help="Disable uvicorn --reload")
+    parser.add_argument("--skip-infra", action="store_true", help="Skip starting Redis/Keycloak")
     args = parser.parse_args()
-
-    # --eval-worker implies --evaluation
-    if args.eval_worker:
-        args.evaluation = True
-
+    # Always run ingestion worker and evaluation services by default
+    args.worker = True
+    args.evaluation = True
     ensure_python_runtime()
 
     infra_processes: list[tuple[str, subprocess.Popen]] = []
@@ -317,22 +309,32 @@ def main() -> int:
         use_keycloak = keycloak_ready()
         use_redis    = redis_ping()
 
+    if use_redis:
+        try:
+            import redis as redis_lib
+            redis_port = int(os.getenv("REDIS_PORT", "6379"))
+            r = redis_lib.Redis(host="localhost", port=redis_port, db=0, socket_timeout=5)
+            r.flushdb()
+            print("  Redis database 0 flushed successfully")
+            r.close()
+        except Exception as exc:
+            print(f"  Warning: could not flush Redis: {exc}")
+
     env      = load_root_env(use_keycloak=use_keycloak, use_redis=use_redis)
     services = list(API_SERVICES)
-    if args.evaluation:
-        services.append(EVALUATION_SERVICE)
 
+    pg_port = env.get("POSTGRES_PORT", "5432")
+    kc_port = env.get("KEYCLOAK_PORT", "8180")
+    redis_port = env.get("REDIS_PORT", "6379")
     print(f"\n[2/3] Configuration")
     print(f"  Python:     {PYTHON}")
-    print(f"  PostgreSQL: localhost:{env.get('SYNC_DATABASE_URL','').split('@localhost:')[1].split('/')[0] if '@localhost:' in env.get('SYNC_DATABASE_URL','') else '5433'}")
+    print(f"  PostgreSQL: localhost:{pg_port}")
     print(f"  Qdrant:     embedded at {env['QDRANT_PATH']}")
-    print(f"  Auth:       {'Keycloak http://localhost:8180' if use_keycloak else 'dev JWT fallback'}")
-    print(f"  Redis:      {'localhost:6379' if use_redis else 'unavailable (sync ingestion + memory cache)'}")
+    print(f"  Auth:       {f'Keycloak http://localhost:{kc_port}' if use_keycloak else 'dev JWT fallback'}")
+    print(f"  Redis:      {f'localhost:{redis_port}' if use_redis else 'unavailable (sync ingestion + memory cache)'}")
     print(f"  OCR:        embedded in worker-service (PaddleOCR + Surya)")
     if not args.worker:
         print(f"  Worker:     disabled (pass --worker to enable Celery ingestion)")
-    if args.eval_worker:
-        print(f"  Eval worker: enabled (Celery worker + Beat for evaluation queue)")
 
     print(f"\n[3/3] Starting API services{' + worker' if args.worker else ''}...")
 
@@ -356,27 +358,29 @@ def main() -> int:
             attach_output_logger(WORKER["name"], worker_proc)
             processes.append((WORKER["name"], worker_proc))
 
-        if args.eval_worker and use_redis:
+        if args.evaluation and use_redis:
+            # Short pause to stagger worker/beat startup
             time.sleep(2)
-            eval_worker_proc, eval_beat_proc = start_eval_worker(env)
-            attach_output_logger("eval-worker", eval_worker_proc)
-            attach_output_logger("eval-beat",   eval_beat_proc)
-            processes.append(("eval-worker", eval_worker_proc))
-            processes.append(("eval-beat",   eval_beat_proc))
+            eval_worker_proc = start_evaluation_worker(env)
+            attach_output_logger("evaluation-worker", eval_worker_proc)
+            processes.append(("evaluation-worker", eval_worker_proc))
+
+            time.sleep(1)
+            eval_beat_proc = start_evaluation_beat(env)
+            attach_output_logger("evaluation-beat", eval_beat_proc)
+            processes.append(("evaluation-beat", eval_beat_proc))
 
         print("\n" + "=" * 60)
         print("  All processes started. Press Ctrl+C to stop.")
         print("=" * 60)
         if use_keycloak:
-            print("  Keycloak:  http://localhost:8180")
+            kc_port = env.get("KEYCLOAK_PORT", "8180")
+            print(f"  Keycloak:  http://localhost:{kc_port}")
         for svc in services:
             print(f"  API docs:  http://localhost:{svc['port']}/docs")
         if not args.worker:
             print("\n  Note: Celery worker not running.")
             print("  Start with:  python run_services.py --worker")
-        if not args.eval_worker:
-            print("\n  Note: Evaluation Celery worker not running.")
-            print("  Start with:  python run_services.py --evaluation --eval-worker")
         print()
 
         while True:

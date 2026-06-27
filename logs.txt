@@ -1,0 +1,734 @@
+Microsoft Windows [Version 10.0.19045.7417]
+(c) Microsoft Corporation. All rights reserved.
+
+D:\Personal\Fixed Solutions\Project Files\v6>.venv\scripts\activate
+
+(.venv) D:\Personal\Fixed Solutions\Project Files\v6>python run_servcies.py --worker --evaluation
+python: can't open file 'D:\\Personal\\Fixed Solutions\\Project Files\\v6\\run_servcies.py': [Errno 2] No such file or directory
+
+(.venv) D:\Personal\Fixed Solutions\Project Files\v6>python run_services.py --worker --evaluation
+============================================================
+  RAG System — Full Local Stack Launcher
+============================================================
+
+[1/3] Starting infrastructure (auth + Redis)...
+  Starting Keycloak (D:\Personal\Fixed Solutions\Project Files\v6\tools\keycloak\bin\kc.bat)...
+  Waiting for Keycloak realm rag-system...
+  Keycloak is ready
+  Redis already running on localhost:6379
+  Waiting for Redis...
+  Redis is ready
+[keycloak] b'Running the server in development mode. DO NOT use this configuration in production.\r\n'[keycloak] b'2026-06-27 15:11:26,399 INFO  [org.hibernate.orm.jdbc.batch] (JPA Startup Thread) HHH100501: Automatic JDBC statement batching enabled (maximum batch size 32)\r\n'[keycloak] b"2026-06-27 15:11:28,393 INFO  [org.infinispan.CONTAINER] (main) ISPN000556: Starting user marshaller 'org.infinispan.commons.marshall.ImmutableProtoStreamMarshaller'\r\n"[keycloak] b'2026-06-27 15:11:29,164 INFO  [org.keycloak.connections.infinispan.DefaultInfinispanConnectionProviderFactory] (main) Node name: node_589155, Site name: null\r\n'  Redis database 0 flushed successfully
+[keycloak] b'2026-06-27 15:11:29,832 INFO  [org.keycloak.exportimport.dir.DirImportProvider] (main) Importing from directory D:\\Personal\\Fixed Solutions\\Project Files\\v6\\tools\\keycloak\\bin\\..\\data\\import\r\n'[keycloak] b'2026-06-27 15:11:31,032 INFO  [org.keycloak.exportimport.singlefile.SingleFileImportProvider] (main) Full importing from file D:\\Personal\\Fixed Solutions\\Project Files\\v6\\tools\\keycloak\\bin\\..\\data\\import\\realm-export.json\r\n'
+[2/3] Configuration
+  Python:     D:\Personal\Fixed Solutions\Project Files\v6\.venv\Scripts\python.exe
+  PostgreSQL: localhost:5434
+  Qdrant:     embedded at D:\Personal\Fixed Solutions\Project Files\v6\data\qdrant
+  Auth:       Keycloak http://localhost:8180
+  Redis:      localhost:6379
+  OCR:        embedded in worker-service (PaddleOCR + Surya)
+
+[3/3] Starting API services + worker...
+[keycloak] b"2026-06-27 15:11:31,479 INFO  [org.keycloak.exportimport.util.ImportUtils] (main) Realm 'rag-system' already exists. Import skipped\r\n"  -> monolith-service on http://localhost:8000
+[keycloak] b'2026-06-27 15:11:31,484 INFO  [org.keycloak.services] (main) KC-SERVICES0030: Full model import requested. Strategy: IGNORE_EXISTING\r\n'[keycloak] b'2026-06-27 15:11:31,485 INFO  [org.keycloak.services] (main) KC-SERVICES0032: Import finished successfully\r\n'[keycloak] b'2026-06-27 15:11:31,845 INFO  [io.quarkus] (main) Keycloak 26.5.0 on JVM (powered by Quarkus 3.27.1) started in 14.692s. Listening on: http://0.0.0.0:8180\r\n'[keycloak] b'2026-06-27 15:11:31,845 INFO  [io.quarkus] (main) Profile dev activated. \r\n'[keycloak] b'2026-06-27 15:11:31,846 INFO  [io.quarkus] (main) Installed features: [agroal, cdi, hibernate-orm, hibernate-validator, jdbc-h2, keycloak, narayana-jta, opentelemetry, reactive-routes, rest, rest-jackson, smallrye-context-propagation, smallrye-openapi, swagger-ui, vertx]\r\n'[monolith-service] INFO:     Will watch for changes in these directories: ['D:\\Personal\\Fixed Solutions\\Project Files\\v6\\services\\monolith']
+[monolith-service] INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+[monolith-service] INFO:     Started reloader process [5136] using WatchFiles
+  Ingestion queue is clean
+  -> worker-service (Celery, queue: ingestion)
+[monolith-service] INFO:     Started server process [9080]
+[monolith-service] INFO:     Waiting for application startup.
+[monolith-service]
+[monolith-service] [Monolith] Starting services lifespan...
+[monolith-service]   [Domain] Initializing DB...
+[monolith-service]   [Ingestion] Creating tables...
+  -> evaluation-worker (Celery, queue: evaluation)
+[monolith-service]   [Generation] Ensuring query log tables...
+  -> evaluation-beat (Celery Beat)
+[monolith-service]   [Evaluation] Bootstrapping tables...
+
+============================================================
+  All processes started. Press Ctrl+C to stop.
+============================================================
+  Keycloak:  http://localhost:8180
+  API docs:  http://localhost:8000/docs
+
+[monolith-service] [Monolith] Startup complete.
+[monolith-service]
+[monolith-service] INFO:     Application startup complete.
+[evaluation-beat] celery beat v5.4.0 (opalescent) is starting.
+[evaluation-worker]
+[evaluation-worker]  -------------- celery@evaluation-worker v5.4.0 (opalescent)
+[evaluation-worker] --- ***** -----
+[evaluation-worker] -- ******* ---- Windows-10-10.0.19045-SP0 2026-06-27 15:11:43
+[evaluation-worker] - *** --- * ---
+[evaluation-worker] - ** ---------- [config]
+[evaluation-worker] - ** ---------- .> app:         evaluation:0x2a82a7ca7b0
+[evaluation-worker] - ** ---------- .> transport:   redis://localhost:6379/0
+[evaluation-worker] - ** ---------- .> results:     redis://localhost:6379/0
+[evaluation-worker] - *** --- * --- .> concurrency: 1 (solo)
+[evaluation-worker] -- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)
+[evaluation-worker] --- ***** -----
+[evaluation-worker]  -------------- [queues]
+[evaluation-worker]                 .> evaluation       exchange=evaluation(direct) key=evaluation
+[evaluation-worker]
+[evaluation-worker]
+[evaluation-worker] [tasks]
+[evaluation-worker]   . tasks.evaluate_batch.evaluate_recent_answers
+[evaluation-worker]
+[evaluation-worker] [2026-06-27 15:11:43,666: INFO/MainProcess] Connected to redis://localhost:6379/0
+[evaluation-worker] [2026-06-27 15:11:43,673: INFO/MainProcess] celery@evaluation-worker ready.
+[evaluation-beat] __    -    ... __   -        _
+[evaluation-beat] LocalTime -> 2026-06-27 15:11:44
+[evaluation-beat] Configuration ->
+[evaluation-beat]     . broker -> redis://localhost:6379/0
+[evaluation-beat]     . loader -> celery.loaders.app.AppLoader
+[evaluation-beat]     . scheduler -> celery.beat.PersistentScheduler
+[evaluation-beat]     . db -> celerybeat-schedule
+[evaluation-beat]     . logfile -> [stderr]@%INFO
+[evaluation-beat]     . maxinterval -> 5.00 minutes (300s)
+[evaluation-beat] [2026-06-27 15:11:44,008: INFO/MainProcess] beat: Starting...
+[worker-service]
+[worker-service]  -------------- celery@ingestion-worker v5.4.0 (opalescent)
+[worker-service] --- ***** -----
+[worker-service] -- ******* ---- Windows-10-10.0.19045-SP0 2026-06-27 15:11:44
+[worker-service] - *** --- * ---
+[worker-service] - ** ---------- [config]
+[worker-service] - ** ---------- .> app:         worker:0x245528faa50
+[worker-service] - ** ---------- .> transport:   redis://localhost:6379/0
+[worker-service] - ** ---------- .> results:     redis://localhost:6379/0
+[worker-service] - *** --- * --- .> concurrency: 1 (solo)
+[worker-service] -- ******* ---- .> task events: OFF (enable -E to monitor tasks in this worker)
+[worker-service] --- ***** -----
+[worker-service]  -------------- [queues]
+[worker-service]                 .> ingestion        exchange=ingestion(direct) key=ingestion
+[worker-service]
+[worker-service]
+[worker-service] [tasks]
+[worker-service]   . worker.tasks.process_document
+[worker-service]
+[evaluation-beat] [2026-06-27 15:11:44,381: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[worker-service] [2026-06-27 15:11:44,384: INFO/MainProcess] Connected to redis://localhost:6379/0
+[worker-service] [2026-06-27 15:11:44,396: INFO/MainProcess] celery@ingestion-worker ready.
+[evaluation-worker] [2026-06-27 15:11:44,405: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[b9b73882-312f-46ef-a77d-563d1f89c612] received
+[evaluation-worker] [2026-06-27 15:11:44,552: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 4)
+[evaluation-worker] [2026-06-27 15:11:44,570: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=4 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:11:44,574: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[b9b73882-312f-46ef-a77d-563d1f89c612] succeeded in 0.16882740000073682s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 4, 'cache_rows_pruned': 0}
+[monolith-service] INFO:     127.0.0.1:55653 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55651 - "GET /ingest/temp-0.10476357644771472 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55652 - "GET /ingest/a8f0a81c-24a0-441f-8a23-b0c6e8327993 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55650 - "GET /domains HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55665 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55671 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55667 - "GET /domains/2798ba14-6ad7-4ee4-ae13-bb23a8739b20/documents HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55674 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55677 - "GET /domains/2798ba14-6ad7-4ee4-ae13-bb23a8739b20/documents HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55679 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55682 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55685 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55669 - "GET /domains HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55688 - "POST /ingest/a8f0a81c-24a0-441f-8a23-b0c6e8327993/cancel HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55696 - "DELETE /domains/2798ba14-6ad7-4ee4-ae13-bb23a8739b20/documents/a8f0a81c-24a0-441f-8a23-b0c6e8327993 HTTP/1.1" 204 No Content
+[worker-service] [2026-06-27 15:12:11,292: INFO/MainProcess] Task worker.tasks.process_document[f5ef4012-10ba-4d47-b10b-8425a3e48539] received
+[worker-service] [2026-06-27 15:12:11,293: WARNING/MainProcess]
+[worker-service] ==================================================
+[worker-service] [2026-06-27 15:12:11,293: WARNING/MainProcess] Processing document: 4ad9e8e2-7e9e-49b0-bef1-be9f10396298
+[worker-service] [2026-06-27 15:12:11,293: WARNING/MainProcess] ==================================================
+[worker-service] [2026-06-27 15:12:11,293: WARNING/MainProcess]   Pre-loading models...
+[monolith-service] INFO:     127.0.0.1:55701 - "POST /ingest HTTP/1.1" 202 Accepted
+[worker-service] [2026-06-27 15:12:11,293: WARNING/MainProcess]   [Model 1/2] Embedding model...
+[worker-service] [2026-06-27 15:12:11,295: WARNING/MainProcess] Loading embedding model in ONNX Runtime: D:\Personal\Fixed Solutions\Project Files\v5\models\e5-small...
+[worker-service] [2026-06-27 15:12:11,904: WARNING/MainProcess] D:\Personal\Fixed Solutions\Project Files\v6\.venv\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.7.0) or chardet (7.4.3)/charset_normalizer (3.4.7) doesn't match a supported version!
+[worker-service]   warnings.warn(
+[worker-service]
+[monolith-service] INFO:     127.0.0.1:55705 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55708 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55711 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55714 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:12:19,254: WARNING/MainProcess] ONNX Client: loading tokenizer from D:\Personal\Fixed Solutions\Project Files\v5\models\e5-small...
+[monolith-service] INFO:     127.0.0.1:55717 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55720 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:12:21,793: WARNING/MainProcess] ONNX Client: initializing session for D:\Personal\Fixed Solutions\Project Files\v5\models\e5-small\onnx\model_qint8_avx512_vnni.onnx...
+[worker-service] [2026-06-27 15:12:22,740: WARNING/MainProcess] Model loaded (ONNX)
+[worker-service] [2026-06-27 15:12:22,740: WARNING/MainProcess]   [Model 1/2] Ready (11.4s)
+[worker-service] [2026-06-27 15:12:22,742: WARNING/MainProcess]   [Model 2/2] NER model...
+[worker-service] [2026-06-27 15:12:22,746: WARNING/MainProcess] Loading NER model: D:\Personal\Fixed Solutions\Project Files\v5\models\huggingface\hub\models--urchade--gliner_multi-v2.1\snapshots\443d26d654e0324125a96bebd8e796c14ff2efe6...
+[monolith-service] INFO:     127.0.0.1:55723 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55726 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55729 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55732 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55735 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55738 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55741 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55744 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55747 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55750 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55753 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55756 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55759 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55762 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55765 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55768 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55771 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55774 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[evaluation-beat] [2026-06-27 15:12:44,187: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:12:44,201: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[d83c2587-cac2-4c9e-beec-b8e079792e30] received
+[evaluation-worker] [2026-06-27 15:12:44,233: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 4)
+[evaluation-worker] [2026-06-27 15:12:44,249: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=4 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:12:44,252: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[d83c2587-cac2-4c9e-beec-b8e079792e30] succeeded in 0.05022759999974369s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 4, 'cache_rows_pruned': 0}
+[monolith-service] INFO:     127.0.0.1:55777 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55780 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55783 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55786 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55789 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55792 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55795 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:12:54,555: WARNING/MainProcess] NER model loaded
+[worker-service] [2026-06-27 15:12:54,587: WARNING/MainProcess]   [Model 2/2] Ready (31.8s)
+[worker-service] [2026-06-27 15:12:54,588: WARNING/MainProcess]   All models loaded in 43.3s
+[worker-service] [2026-06-27 15:12:55,097: WARNING/MainProcess]   Document 4ad9e8e2-7e9e-49b0-bef1-be9f10396298 status -> processing
+[worker-service] [2026-06-27 15:12:55,314: WARNING/MainProcess]   File:        D:\Personal\Fixed Solutions\Project Files\v6\data\uploads\4ad9e8e2-7e9e-49b0-bef1-be9f10396298\2025 Form W-4.pdf
+[worker-service] [2026-06-27 15:12:55,314: WARNING/MainProcess]   Domain:      2798ba14-6ad7-4ee4-ae13-bb23a8739b20
+[worker-service] [2026-06-27 15:12:55,314: WARNING/MainProcess]   Source type: pdf
+[worker-service] [2026-06-27 15:12:55,315: WARNING/MainProcess]
+[worker-service] [1/6] Extracting text from PDF file...
+[monolith-service] INFO:     127.0.0.1:55800 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55803 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55806 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55809 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55812 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[worker-service] [2026-06-27 15:13:02,284: INFO/MainProcess] Camelot page 1: found 4 table(s), accuracies: ['100.0% (stream)', '93.4% (stream)', '99.0% (lattice)', '92.5% (lattice)']
+[monolith-service] INFO:     127.0.0.1:55815 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:13:03,204: INFO/MainProcess] Camelot page 2: found 1 table(s), accuracies: ['100.0% (stream)']
+[monolith-service] INFO:     127.0.0.1:55818 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55821 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55824 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55827 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55830 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:13:05,933: INFO/MainProcess] Camelot page 3: found 4 table(s), accuracies: ['49.8% (stream)', '92.3% (stream)', '97.4% (stream)', '99.0% (stream)']
+[worker-service] [2026-06-27 15:13:07,781: INFO/MainProcess] Camelot page 4: found 3 table(s), accuracies: ['99.7% (lattice)', '99.6% (lattice)', '99.6% (lattice)']
+[worker-service] [2026-06-27 15:13:07,933: INFO/MainProcess] PDF extraction complete: 4 pages with text (2025 Form W-4.pdf)
+[monolith-service] INFO:     127.0.0.1:55833 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55836 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:13:09,747: WARNING/MainProcess]   Extracted 4 pages/segments
+[worker-service] [2026-06-27 15:13:09,747: WARNING/MainProcess]
+[worker-service] [2/6] Chunking text (semantic)...
+[monolith-service] INFO:     127.0.0.1:55839 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55842 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:13:13,542: WARNING/MainProcess]   Table-aware semantic chunking: 4 pages -> 35 chunks
+[worker-service] [2026-06-27 15:13:13,542: WARNING/MainProcess]
+[worker-service] [3/6] Embedding chunks...
+[worker-service] [2026-06-27 15:13:13,543: WARNING/MainProcess]   Embedding 35 chunks in batches of 32...
+[monolith-service] INFO:     127.0.0.1:55845 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55848 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55851 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55854 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55857 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55860 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55866 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55869 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55872 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55875 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55878 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55881 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55884 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55887 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55890 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55893 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55896 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55899 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55902 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:13:37,779: WARNING/MainProcess]   Embedded 35 chunks â€” dim=384
+[worker-service] [2026-06-27 15:13:37,779: WARNING/MainProcess]
+[worker-service] [4/6] Indexing into Qdrant + PostgreSQL...
+[worker-service] [2026-06-27 15:13:37,929: WARNING/MainProcess]   Qdrant collection exists: 2798ba14-6ad7-4ee4-ae13-bb23a8739b20
+[monolith-service] INFO:     127.0.0.1:55905 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[worker-service] [2026-06-27 15:13:38,284: WARNING/MainProcess]   Qdrant: indexed 35/35 chunks into '2798ba14-6ad7-4ee4-ae13-bb23a8739b20' (skipped 0 chunks without embedding)
+[worker-service] [2026-06-27 15:13:38,300: WARNING/MainProcess]   document_chunks table ready
+[monolith-service] INFO:     127.0.0.1:55908 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:13:38,420: WARNING/MainProcess]   PostgreSQL: indexed 35 chunks (BM25 ready)
+[worker-service] [2026-06-27 15:13:38,420: WARNING/MainProcess]
+[worker-service] [5/6] Extracting entities (NER) for graph construction...
+[worker-service] [2026-06-27 15:13:38,421: WARNING/MainProcess]   Extracting entities from 35 chunks...
+[worker-service] [2026-06-27 15:13:39,925: WARNING/MainProcess] Asking to truncate to max_length but no maximum length is provided and the model has no predefined maximum length. Default to no truncation.
+[monolith-service] INFO:     127.0.0.1:55911 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55914 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55917 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[evaluation-beat] [2026-06-27 15:13:44,187: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:13:44,196: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[46655f1d-f953-4214-aea0-9afc4ecd18e9] received
+[evaluation-worker] [2026-06-27 15:13:44,219: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 4)
+[evaluation-worker] [2026-06-27 15:13:44,230: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=4 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:13:44,234: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[46655f1d-f953-4214-aea0-9afc4ecd18e9] succeeded in 0.03685309999946185s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 4, 'cache_rows_pruned': 0}
+[monolith-service] INFO:     127.0.0.1:55920 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55923 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55926 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55930 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55933 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55936 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55939 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55942 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55945 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55948 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55951 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55954 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55957 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55960 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55963 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55966 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55969 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55972 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55975 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55978 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55981 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55984 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:55988 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:55991 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56000 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56003 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56006 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56009 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56012 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56015 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56019 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56022 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56025 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56028 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56031 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56034 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56037 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56040 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56043 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56046 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56049 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56052 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56055 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56058 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56061 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56064 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[evaluation-beat] [2026-06-27 15:14:44,187: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:14:44,197: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[acf24ba7-963f-4066-ab4c-c7c7e59801a0] received
+[evaluation-worker] [2026-06-27 15:14:44,222: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 4)
+[evaluation-worker] [2026-06-27 15:14:44,239: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=4 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:14:44,242: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[acf24ba7-963f-4066-ab4c-c7c7e59801a0] succeeded in 0.04421390000061365s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 4, 'cache_rows_pruned': 0}
+[monolith-service] INFO:     127.0.0.1:56067 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56070 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56073 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56076 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56079 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56082 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56085 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56088 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56091 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56094 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56097 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56100 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56103 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56106 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56109 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56112 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56115 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56118 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56121 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56124 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56127 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56130 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56133 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56136 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56139 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56142 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56145 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56148 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56151 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56154 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56157 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56160 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56163 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56166 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56169 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56172 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56175 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56178 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56181 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56184 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56187 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56190 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56193 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56196 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56199 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56202 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[evaluation-beat] [2026-06-27 15:15:44,198: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:15:44,207: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[dbce0ab1-eee6-4a19-ad33-c94542438020] received
+[evaluation-worker] [2026-06-27 15:15:44,232: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 4)
+[evaluation-worker] [2026-06-27 15:15:44,241: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=4 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:15:44,245: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[dbce0ab1-eee6-4a19-ad33-c94542438020] succeeded in 0.03690029999961553s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 4, 'cache_rows_pruned': 0}
+[monolith-service] INFO:     127.0.0.1:56205 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56208 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56211 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56214 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56217 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56220 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56223 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56226 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56229 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56232 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56235 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56238 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56241 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56244 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56247 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56250 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56253 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56256 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56259 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56262 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56265 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56268 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56271 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56274 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56281 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56284 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56287 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56290 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56293 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56296 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:16:24,837: WARNING/MainProcess] D:\Personal\Fixed Solutions\Project Files\v6\.venv\Lib\site-packages\gliner\data_processing\processor.py:351: UserWarning: Sentence of length 391 has been truncated to 384
+[worker-service]   warnings.warn(f"Sentence of length {len(tokens)} has been truncated to {max_len}")
+[worker-service]
+[worker-service] [2026-06-27 15:16:24,847: WARNING/MainProcess] D:\Personal\Fixed Solutions\Project Files\v6\.venv\Lib\site-packages\gliner\data_processing\processor.py:351: UserWarning: Sentence of length 386 has been truncated to 384
+[worker-service]   warnings.warn(f"Sentence of length {len(tokens)} has been truncated to {max_len}")
+[worker-service]
+[worker-service] [2026-06-27 15:16:24,875: WARNING/MainProcess] D:\Personal\Fixed Solutions\Project Files\v6\.venv\Lib\site-packages\gliner\data_processing\processor.py:351: UserWarning: Sentence of length 398 has been truncated to 384
+[worker-service]   warnings.warn(f"Sentence of length {len(tokens)} has been truncated to {max_len}")
+[worker-service]
+[monolith-service] INFO:     127.0.0.1:56299 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56302 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56305 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56308 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56311 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56314 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56317 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56320 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56323 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56326 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56329 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56332 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56335 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56338 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56341 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56345 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[evaluation-beat] [2026-06-27 15:16:44,198: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:16:44,207: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[6d764afc-6b0d-43e3-9b99-7b5b03dffa76] received
+[evaluation-worker] [2026-06-27 15:16:44,234: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 4)
+[evaluation-worker] [2026-06-27 15:16:44,244: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=4 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:16:44,248: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[6d764afc-6b0d-43e3-9b99-7b5b03dffa76] succeeded in 0.04042929999923217s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 4, 'cache_rows_pruned': 0}
+[monolith-service] INFO:     127.0.0.1:56348 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56355 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56360 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56370 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56373 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56380 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56384 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56400 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56405 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56413 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56416 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56421 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56424 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56427 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56430 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56433 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56437 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56439 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56448 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56451 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56454 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56458 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56462 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56466 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56472 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56475 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56482 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56485 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56489 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56492 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56497 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56500 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56503 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56506 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56510 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56513 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56517 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56520 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56523 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56526 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56529 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:17:36,205: WARNING/MainProcess] D:\Personal\Fixed Solutions\Project Files\v6\.venv\Lib\site-packages\gliner\data_processing\processor.py:351: UserWarning: Sentence of length 401 has been truncated to 384
+[worker-service]   warnings.warn(f"Sentence of length {len(tokens)} has been truncated to {max_len}")
+[worker-service]
+[worker-service] [2026-06-27 15:17:36,221: WARNING/MainProcess] D:\Personal\Fixed Solutions\Project Files\v6\.venv\Lib\site-packages\gliner\data_processing\processor.py:351: UserWarning: Sentence of length 387 has been truncated to 384
+[worker-service]   warnings.warn(f"Sentence of length {len(tokens)} has been truncated to {max_len}")
+[worker-service]
+[monolith-service] INFO:     127.0.0.1:56532 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56535 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56540 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56545 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56551 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[evaluation-beat] [2026-06-27 15:17:44,198: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:17:44,205: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[9c3b4d84-f975-4a1a-ab5a-89b5471a771b] received
+[evaluation-worker] [2026-06-27 15:17:44,237: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 4)
+[evaluation-worker] [2026-06-27 15:17:44,246: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=4 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:17:44,252: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[9c3b4d84-f975-4a1a-ab5a-89b5471a771b] succeeded in 0.04659189999983937s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 4, 'cache_rows_pruned': 0}
+[monolith-service] INFO:     127.0.0.1:56554 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56559 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56563 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56571 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56575 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56587 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56590 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56595 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56598 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56601 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56604 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56607 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56610 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56613 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56616 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56619 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56622 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56625 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56628 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56631 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56635 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56638 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56642 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56645 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56650 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56653 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56662 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56668 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56673 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56676 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56683 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56686 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56690 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56693 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56697 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56700 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56704 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56707 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56710 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56713 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56717 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56722 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56726 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56732 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56735 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:18:43,220: WARNING/MainProcess]   Extracted 31 entities across 35 chunks
+[worker-service] [2026-06-27 15:18:43,221: WARNING/MainProcess]
+[worker-service] [6/7] Extracting relations (LLM) for graph construction...
+[worker-service] [2026-06-27 15:18:43,221: WARNING/MainProcess]   Extracting relations from 35 chunks in 2 group(s) of up to 20...
+[monolith-service] INFO:     127.0.0.1:56738 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[evaluation-beat] [2026-06-27 15:18:44,199: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:18:44,208: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[c22595c7-1521-4f20-80fc-e8bca74d9588] received
+[evaluation-worker] [2026-06-27 15:18:44,237: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 4)
+[evaluation-worker] [2026-06-27 15:18:44,257: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=4 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:18:44,258: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[c22595c7-1521-4f20-80fc-e8bca74d9588] succeeded in 0.049859700000524754s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 4, 'cache_rows_pruned': 0}
+[monolith-service] INFO:     127.0.0.1:56741 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:18:45,978: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+[worker-service] [2026-06-27 15:18:45,988: WARNING/MainProcess]   [WARN] dropping triple with invalid relation type: {'subject': 'Employer', 'relation': 'RECEIVES', 'object': 'Form W-4'}
+[worker-service] [2026-06-27 15:18:45,988: WARNING/MainProcess]     Group 1/2: 8 relation(s) found
+[monolith-service] INFO:     127.0.0.1:56745 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56748 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:18:48,931: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+[worker-service] [2026-06-27 15:18:48,933: WARNING/MainProcess]   [WARN] Rate limited (429). Retrying in 13.5s (attempt 1/3)
+[monolith-service] INFO:     127.0.0.1:56753 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56756 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56759 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56762 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56765 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56768 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56772 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56775 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56780 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56783 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:19:04,326: INFO/MainProcess] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+[worker-service] [2026-06-27 15:19:04,330: WARNING/MainProcess]     Group 2/2: 8 relation(s) found
+[worker-service] [2026-06-27 15:19:04,331: WARNING/MainProcess]   Extracted 16 total relations across 35 chunks
+[worker-service] [2026-06-27 15:19:04,332: WARNING/MainProcess]
+[worker-service] [7/7] Writing entities and relations to Apache AGE graph...
+[worker-service] [2026-06-27 15:19:04,932: INFO/MainProcess] Upserting entities into Apache AGE knowledge graph...
+[monolith-service] INFO:     127.0.0.1:56789 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56792 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56795 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56798 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56801 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[worker-service] [2026-06-27 15:19:05,822: INFO/MainProcess] Upserting relation triples into Apache AGE knowledge graph...
+[worker-service] [2026-06-27 15:19:05,975: WARNING/MainProcess] Creating stub vertex for unresolved object: 'Employee'
+[worker-service] [2026-06-27 15:19:06,450: WARNING/MainProcess] Creating stub vertex for unresolved object: 'United States'
+[worker-service] [2026-06-27 15:19:06,624: INFO/MainProcess] Graph population completed: created/updated relations (16)
+[worker-service] [2026-06-27 15:19:06,626: WARNING/MainProcess]   Graph write status: success
+[worker-service] [2026-06-27 15:19:06,635: WARNING/MainProcess]   Document 4ad9e8e2-7e9e-49b0-bef1-be9f10396298 status -> done
+[worker-service] [2026-06-27 15:19:06,635: WARNING/MainProcess]
+[worker-service] Document 4ad9e8e2-7e9e-49b0-bef1-be9f10396298 processed successfully
+[worker-service] [2026-06-27 15:19:06,635: WARNING/MainProcess]   Source type: pdf
+[worker-service] [2026-06-27 15:19:06,635: WARNING/MainProcess]   Qdrant:      35 chunks indexed
+[worker-service] [2026-06-27 15:19:06,636: WARNING/MainProcess]   PostgreSQL:  35 chunks indexed (BM25)
+[worker-service] [2026-06-27 15:19:06,636: WARNING/MainProcess]   Entities:    31 extracted (NER)
+[worker-service] [2026-06-27 15:19:06,636: WARNING/MainProcess]   Relations:   16 extracted (LLM)
+[worker-service] [2026-06-27 15:19:06,636: WARNING/MainProcess]   Graph Write: success
+[worker-service] [2026-06-27 15:19:06,636: WARNING/MainProcess] ==================================================
+[worker-service] [2026-06-27 15:19:06,651: INFO/MainProcess] Task worker.tasks.process_document[f5ef4012-10ba-4d47-b10b-8425a3e48539] succeeded in 415.3585949999997s: {'document_id': '4ad9e8e2-7e9e-49b0-bef1-be9f10396298', 'pages': 4, 'chunks': 35, 'entities': 31, 'relations': 16, 'source_type': 'pdf', 'status': 'done'}
+[monolith-service] INFO:     127.0.0.1:56807 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56810 - "GET /ingest/4ad9e8e2-7e9e-49b0-bef1-be9f10396298 HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56813 - "GET /domains/2798ba14-6ad7-4ee4-ae13-bb23a8739b20/documents HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56816 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56820 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56830 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56833 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56836 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56839 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56843 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56846 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56849 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56852 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56855 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56858 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56861 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56865 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56868 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[evaluation-beat] [2026-06-27 15:19:44,199: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:19:44,205: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[b7b6c9fb-f1cf-45c2-888c-345ea09335c1] received
+[evaluation-worker] [2026-06-27 15:19:44,220: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 4)
+[evaluation-worker] [2026-06-27 15:19:44,225: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=4 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:19:44,228: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[b7b6c9fb-f1cf-45c2-888c-345ea09335c1] succeeded in 0.022523600000567967s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 4, 'cache_rows_pruned': 0}
+[monolith-service] INFO:     127.0.0.1:56871 - "GET /ingest/temp-0.20000432465823903 HTTP/1.1" 404 Not Found
+[monolith-service] INFO:     127.0.0.1:56874 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56883 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56880 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56890 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56888 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56894 - "GET /evaluate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56896 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56904 - "GET /evaluate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56905 - "GET /health HTTP/1.1" 200 OK
+[monolith-service] 2026-06-27 15:19:49,931 | INFO     | httpx | HTTP Request: GET http://localhost:8000/health "HTTP/1.1 200 OK"
+[monolith-service] INFO:     127.0.0.1:56907 - "GET /health HTTP/1.1" 200 OK
+[monolith-service] 2026-06-27 15:19:51,111 | INFO     | httpx | HTTP Request: GET http://localhost:8000/health "HTTP/1.1 200 OK"
+[monolith-service] INFO:     127.0.0.1:56909 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] 2026-06-27 15:19:52,047 | INFO     | httpx | HTTP Request: GET http://localhost:8000/generate/health "HTTP/1.1 200 OK"
+[monolith-service] INFO:     127.0.0.1:56911 - "GET /evaluate/health HTTP/1.1" 200 OK
+[monolith-service] 2026-06-27 15:19:52,974 | INFO     | httpx | HTTP Request: GET http://localhost:8000/evaluate/health "HTTP/1.1 200 OK"
+[monolith-service] INFO:     127.0.0.1:56878 - "GET /monitoring/metrics HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56917 - "GET /health HTTP/1.1" 200 OK
+[monolith-service] 2026-06-27 15:19:54,441 | INFO     | httpx | HTTP Request: GET http://localhost:8000/health "HTTP/1.1 200 OK"
+[monolith-service] INFO:     127.0.0.1:56926 - "GET /evaluate/logs HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56928 - "GET /moderation/queue HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56929 - "GET /moderation/audit HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56932 - "GET /evaluate/logs HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56936 - "GET /moderation/queue HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56933 - "GET /health HTTP/1.1" 200 OK
+[monolith-service] 2026-06-27 15:19:55,489 | INFO     | httpx | HTTP Request: GET http://localhost:8000/health "HTTP/1.1 200 OK"
+[monolith-service] INFO:     127.0.0.1:56939 - "GET /moderation/audit HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56941 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] 2026-06-27 15:19:56,412 | INFO     | httpx | HTTP Request: GET http://localhost:8000/generate/health "HTTP/1.1 200 OK"
+[monolith-service] INFO:     127.0.0.1:56943 - "GET /evaluate/health HTTP/1.1" 200 OK
+[monolith-service] 2026-06-27 15:19:57,463 | INFO     | httpx | HTTP Request: GET http://localhost:8000/evaluate/health "HTTP/1.1 200 OK"
+[monolith-service] INFO:     127.0.0.1:56914 - "GET /monitoring/metrics HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56946 - "POST /evaluate/reset HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56955 - "GET /evaluate/logs HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56958 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56956 - "GET /moderation/queue HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56957 - "GET /moderation/audit HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56961 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56964 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56967 - "GET /domains/2798ba14-6ad7-4ee4-ae13-bb23a8739b20/config HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56992 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56995 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:56998 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57005 - "GET /domains HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57006 - "GET /domains/2798ba14-6ad7-4ee4-ae13-bb23a8739b20/config HTTP/1.1" 200 OK
+[evaluation-beat] [2026-06-27 15:20:44,199: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:20:44,203: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[942ffea1-3a86-4dc1-bd75-6c94cec44a57] received
+[evaluation-worker] [2026-06-27 15:20:44,272: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 0)
+[evaluation-worker] [2026-06-27 15:20:44,281: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=0 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:20:44,283: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[942ffea1-3a86-4dc1-bd75-6c94cec44a57] succeeded in 0.07914299999993091s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 0, 'cache_rows_pruned': 0}
+[monolith-service] INFO:     127.0.0.1:57013 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57016 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57019 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57025 - "GET /domains HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57026 - "GET /domains/2798ba14-6ad7-4ee4-ae13-bb23a8739b20/config HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57030 - "GET /domains HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57032 - "GET /domains/2798ba14-6ad7-4ee4-ae13-bb23a8739b20/config HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57044 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57048 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57051 - "GET /generate/health HTTP/1.1" 200 OK
+[monolith-service] 2026-06-27 15:21:42,907 | INFO     | router | query_submitted: correlation_id=697a1e68-52fa-49f1-9e7f-7ee130f088f8 domain=2798ba14-6ad7-4ee4-ae13-bb23a8739b20 user=admin
+[monolith-service] 2026-06-27 15:21:43,251 | INFO     | routes.retrieve | Initializing RetrievalService (loading model)...
+[monolith-service] 2026-06-27 15:21:43,261 | INFO     | routes.retrieve | RetrievalService initialized successfully.
+[monolith-service] INFO:     127.0.0.1:57064 - "GET /domains/2798ba14-6ad7-4ee4-ae13-bb23a8739b20/config HTTP/1.1" 200 OK
+[monolith-service] 2026-06-27 15:21:43,928 | INFO     | httpx | HTTP Request: GET http://localhost:8000/domains/2798ba14-6ad7-4ee4-ae13-bb23a8739b20/config "HTTP/1.1 200 OK"
+[evaluation-beat] [2026-06-27 15:21:44,200: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:21:44,211: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[bc0dc177-f71b-4a4e-bd59-057fdc75be38] received
+[evaluation-worker] [2026-06-27 15:21:44,240: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 0)
+[evaluation-worker] [2026-06-27 15:21:44,245: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=0 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:21:44,251: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[bc0dc177-f71b-4a4e-bd59-057fdc75be38] succeeded in 0.035554299999603245s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 0, 'cache_rows_pruned': 0}
+[monolith-service] 2026-06-27 15:21:44,364 | INFO     | httpx | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+[monolith-service] 2026-06-27 15:21:44,374 | INFO     | services.retrieval_router | LLM routing: vector=True bm25=True graph=True (decided_by=llm)
+[monolith-service] 2026-06-27 15:21:44,375 | INFO     | services.retrieval_pipeline | Routing [llm]: vector=True bm25=True graph=True
+[monolith-service] 2026-06-27 15:21:44,394 | INFO     | services.embedding | Loading embedding model in ONNX Runtime: D:\Personal\Fixed Solutions\Project Files\v5\models\e5-small (exists=True)
+[monolith-service] D:\Personal\Fixed Solutions\Project Files\v6\.venv\Lib\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.7.0) or chardet (7.4.3)/charset_normalizer (3.4.7) doesn't match a supported version!
+[monolith-service]   warnings.warn(
+[monolith-service] D:\Personal\Fixed Solutions\Project Files\v6\.venv\Lib\site-packages\transformers\utils\hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
+[monolith-service]   warnings.warn(
+[monolith-service] ONNX Client: loading tokenizer from D:\Personal\Fixed Solutions\Project Files\v5\models\e5-small...
+[monolith-service] ONNX Client: initializing session for D:\Personal\Fixed Solutions\Project Files\v5\models\e5-small\onnx\model_qint8_avx512_vnni.onnx...
+[monolith-service] 2026-06-27 15:21:56,104 | INFO     | services.embedding | Embedding model ready (ONNX). (took 11.71s)
+[monolith-service] 2026-06-27 15:21:56,204 | INFO     | services.rrf_fusion | RRF input [vector]: 35 chunks â€” top 3: ['4ad9e8e2(score=0.8944)', '4ad9e8e2(score=0.8880)', '4ad9e8e2(score=0.8683)']
+[monolith-service] 2026-06-27 15:21:56,204 | INFO     | services.rrf_fusion | RRF input [bm25]: 30 chunks â€” top 3: ['4ad9e8e2(score=0.8000)', '4ad9e8e2(score=0.7000)', '4ad9e8e2(score=0.6000)']
+[monolith-service] 2026-06-27 15:21:56,204 | INFO     | services.rrf_fusion | RRF input [graph]: 3 chunks â€” top 3: ['4ad9e8e2(score=0.9500)', '4ad9e8e2(score=0.9500)', '4ad9e8e2(score=0.9500)']
+[monolith-service] 2026-06-27 15:21:56,205 | INFO     | services.rrf_fusion | RRF output: 35 unique chunks â€” 30 appeared in multiple engines â€” top 3: ['4ad9e8e2(rrf=0.13382)', '4ad9e8e2(rrf=0.12997)', '4ad9e8e2(rrf=0.12863)']
+[monolith-service] 2026-06-27 15:21:56,208 | INFO     | services.reranker | Loading reranker model: D:\Personal\Fixed Solutions\Project Files\v5\models\huggingface\hub\models--cross-encoder--mmarco-mMiniLMv2-L12-H384-v1\snapshots\1427fd652930e4ba29e8149678df786c240d8825 (exists=True)
+[monolith-service] INFO:     127.0.0.1:57085 - "GET /domains/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57092 - "GET /ingest/health HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57077 - "GET /domains HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57078 - "GET /domains/2798ba14-6ad7-4ee4-ae13-bb23a8739b20/config HTTP/1.1" 200 OK
+[monolith-service] INFO:     127.0.0.1:57095 - "GET /generate/health HTTP/1.1" 200 OK
+[evaluation-beat] [2026-06-27 15:22:44,201: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:22:44,210: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[062180d0-b644-4205-ab79-78c98c76c927] received
+[evaluation-worker] [2026-06-27 15:22:44,232: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 0)
+[evaluation-worker] [2026-06-27 15:22:44,244: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=0 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:22:44,248: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[062180d0-b644-4205-ab79-78c98c76c927] succeeded in 0.03783079999993788s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 0, 'cache_rows_pruned': 0}
+[evaluation-beat] [2026-06-27 15:23:44,201: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:23:44,210: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[666c1a72-f800-4d32-907a-50b0276e8bdf] received
+[evaluation-worker] [2026-06-27 15:23:44,238: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 0)
+[evaluation-worker] [2026-06-27 15:23:44,246: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=0 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:23:44,250: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[666c1a72-f800-4d32-907a-50b0276e8bdf] succeeded in 0.04045380000025034s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 0, 'cache_rows_pruned': 0}
+[evaluation-beat] [2026-06-27 15:24:44,202: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:24:44,212: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[db106a60-f593-418f-ac8a-87224adce1a1] received
+[evaluation-worker] [2026-06-27 15:24:44,244: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 0)
+[evaluation-worker] [2026-06-27 15:24:44,252: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=0 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:24:44,259: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[db106a60-f593-418f-ac8a-87224adce1a1] succeeded in 0.04628580000007787s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 0, 'cache_rows_pruned': 0}
+[evaluation-beat] [2026-06-27 15:25:44,201: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:25:44,211: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[f6343023-5e75-4154-9775-421814564a7b] received
+[evaluation-worker] [2026-06-27 15:25:44,245: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 0)
+[evaluation-worker] [2026-06-27 15:25:44,258: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=0 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:25:44,261: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[f6343023-5e75-4154-9775-421814564a7b] succeeded in 0.04939530000046943s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 0, 'cache_rows_pruned': 0}
+[evaluation-beat] [2026-06-27 15:26:44,202: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:26:44,212: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[27175456-c998-4aa4-9587-f2b764da077c] received
+[evaluation-worker] [2026-06-27 15:26:44,231: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 0)
+[evaluation-worker] [2026-06-27 15:26:44,246: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=0 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:26:44,247: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[27175456-c998-4aa4-9587-f2b764da077c] succeeded in 0.034961199999997916s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 0, 'cache_rows_pruned': 0}
+[evaluation-beat] [2026-06-27 15:27:44,202: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:27:44,211: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[187a8985-fe5d-411d-8e2e-ef15763bd529] received
+[evaluation-worker] [2026-06-27 15:27:44,233: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 0)
+[evaluation-worker] [2026-06-27 15:27:44,244: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=0 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:27:44,245: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[187a8985-fe5d-411d-8e2e-ef15763bd529] succeeded in 0.03361999999924592s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 0, 'cache_rows_pruned': 0}
+[evaluation-beat] [2026-06-27 15:28:44,202: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:28:44,212: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[a3445fba-3bf3-468d-b790-ce3509489d14] received
+[evaluation-worker] [2026-06-27 15:28:44,247: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 0)
+[evaluation-worker] [2026-06-27 15:28:44,255: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=0 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:28:44,257: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[a3445fba-3bf3-468d-b790-ce3509489d14] succeeded in 0.0444299000000683s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 0, 'cache_rows_pruned': 0}
+[evaluation-beat] [2026-06-27 15:29:44,203: INFO/MainProcess] Scheduler: Sending due task evaluate-recent-answers-every-30min (tasks.evaluate_batch.evaluate_recent_answers)
+[evaluation-worker] [2026-06-27 15:29:44,212: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[b37f407b-4f06-4665-9215-69e0ba8b3638] received
+[evaluation-worker] [2026-06-27 15:29:44,233: INFO/MainProcess] evaluate_recent_answers start â€” 0 rows sampled (cursor was id > 0)
+[evaluation-worker] [2026-06-27 15:29:44,246: INFO/MainProcess] evaluate_recent_answers complete â€” evaluated=0 flagged=0 cursor_advanced_to=0 cache_rows_pruned=0
+[evaluation-worker] [2026-06-27 15:29:44,248: INFO/MainProcess] Task tasks.evaluate_batch.evaluate_recent_answers[b37f407b-4f06-4665-9215-69e0ba8b3638] succeeded in 0.03480240000044432s: {'evaluated': 0, 'flagged_for_review': 0, 'cursor': 0, 'cache_rows_pruned': 0}

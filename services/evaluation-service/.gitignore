@@ -1,0 +1,8 @@
+# .gitignore for evaluation-service
+__pycache__/
+*.pyc
+.env
+.venv/
+.vscode/
+celerybeat-schedule*
+*.log

@@ -5,14 +5,15 @@ Small FastAPI router for the human review side of the moderation queue.
 """
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from typing import Optional
 
 from schemas import (
     ModerationDecision,
     ModerationDecisionOut,
     ModerationQueueResponse,
 )
-from db.queries import list_pending_moderation_items, decide_moderation_item, SessionLocal
+from db.queries import list_pending_moderation_items, decide_moderation_item, list_audit_logs
 from metrics import moderation_queue_size  # FIX: added import
 
 router = APIRouter()
@@ -51,40 +52,12 @@ async def submit_decision(item_id: uuid.UUID, body: ModerationDecision):
 
 
 @router.get("/audit")
-async def get_audit_logs(event_type: str = None, limit: int = 100) -> dict:
+async def get_audit_logs(event_type: Optional[str] = Query(None)):
     """
-    Returns audit log entries. Falls back to evaluation_logs as an audit trail
-    if a dedicated audit_logs table doesn't exist.
+    Returns audit logs of the evaluation/moderation actions.
     """
-    try:
-        from db.models import EvaluationLog as EvalLogModel
-        session = SessionLocal()
-        try:
-            rows = (
-                session.query(EvalLogModel)
-                .order_by(EvalLogModel.evaluated_at.desc())
-                .limit(limit)
-                .all()
-            )
-            logs = [
-                {
-                    "id": str(r.id),
-                    "event_type": "evaluation",
-                    "actor": r.model_used,
-                    "query_id": r.query_id,
-                    "details": {
-                        "overall_score": r.overall_score,
-                        "model_used": r.model_used,
-                    },
-                    "created_at": r.evaluated_at.isoformat() if r.evaluated_at else None,
-                }
-                for r in rows
-            ]
-        finally:
-            session.close()
-        return {"logs": logs}
-    except Exception as exc:
-        return {"logs": []}
+    logs = list_audit_logs(event_type=event_type)
+    return {"logs": logs}
 
 
 @router.get("/health")

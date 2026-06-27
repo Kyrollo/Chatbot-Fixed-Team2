@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -10,11 +11,11 @@ class Settings(BaseSettings):
     )
 
     # Database
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/domain_db"
+    DATABASE_URL: str = f"postgresql+asyncpg://postgres:postgres@localhost:{os.getenv('POSTGRES_PORT', '5432')}/domain_db"
 
     # Keycloak
-    KEYCLOAK_ISSUER: str = "http://localhost:8180/realms/rag-system"
-    KEYCLOAK_REALM_URL: str = "http://localhost:8180/realms/rag-system"
+    KEYCLOAK_ISSUER: str = f"http://localhost:{os.getenv('KEYCLOAK_PORT', '8180')}/realms/rag-system"
+    KEYCLOAK_REALM_URL: str = f"http://localhost:{os.getenv('KEYCLOAK_PORT', '8180')}/realms/rag-system"
     KEYCLOAK_PUBLIC_KEY: str = ""  # PEM body (without header/footer) or full PEM
     KEYCLOAK_CLIENT_ID: str = "domain-service"
     KEYCLOAK_ALGORITHM: str = "RS256"

@@ -1,41 +1,34 @@
-import logging
 import json
+import logging
 import re
-import asyncpg
+from dataclasses import dataclass
+from difflib import SequenceMatcher
 from typing import Optional
+
+import asyncpg
+
 from config import settings
 from schemas.retrieval import ChunkResult
 from .base_retriever import BaseRetriever
+from .query_analyzer import extract_query_entities, normalize_query_text
 
 logger = logging.getLogger(__name__)
 
-def normalize_arabic(text: str) -> str:
-    """
-    Standardize Arabic text to handle spelling variants, diacritics, and spaces.
-    """
-    if not text:
-        return ""
-    # Strip diacritics (Harakat)
-    text = re.sub(r'[\u064B-\u0652]', '', text)
-    # Normalize Alif variants (أ, إ, آ, ٱ) -> ا
-    text = re.sub(r'[أإآٱ]', 'ا', text)
-    # Normalize Alif Maqsura (ى) -> Ya (ي)
-    text = re.sub(r'ى', 'ي', text)
-    # Normalize Ta Marbuta (ة) -> Ha (ه)
-    text = re.sub(r'ة', 'ه', text)
-    # Collapse multiple whitespaces and strip
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+_GRAPH_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-def parse_agtype(val: str):
-    """
-    Parses agtype JSON values returned from Apache AGE queries.
-    """
+
+def _safe_graph_name() -> str:
+    graph_name = settings.AGE_GRAPH_NAME
+    if not _GRAPH_NAME_RE.match(graph_name):
+        raise ValueError(f"Invalid AGE graph name: {graph_name!r}")
+    return graph_name
+
+
+def parse_agtype(val):
     if not val:
         return None
     if isinstance(val, (dict, list)):
         return val
-    # Strip trailing ::agtype if present
     if isinstance(val, str) and val.endswith("::agtype"):
         val = val[:-8]
     try:
@@ -44,6 +37,51 @@ def parse_agtype(val: str):
         if isinstance(val, str) and val.startswith('"') and val.endswith('"'):
             return val[1:-1]
         return val
+
+
+def _token_overlap(a: str, b: str) -> float:
+    a_tokens = set(a.split())
+    b_tokens = set(b.split())
+    if not a_tokens or not b_tokens:
+        return 0.0
+    return len(a_tokens & b_tokens) / max(len(a_tokens), len(b_tokens))
+
+
+def _score_match(query_entity: str, candidate: str) -> float:
+    if not query_entity or not candidate:
+        return 0.0
+    if query_entity == candidate:
+        return 1.0
+    if query_entity in candidate or candidate in query_entity:
+        return 0.9
+    overlap = _token_overlap(query_entity, candidate)
+    similarity = SequenceMatcher(None, query_entity, candidate).ratio()
+    return max(overlap, similarity)
+
+
+def _expand_aliases(name: str) -> list[str]:
+    normalized = normalize_query_text(name)
+    aliases = {normalized}
+    compact = normalized.replace("-", "").replace(" ", "")
+    if compact:
+        aliases.add(compact)
+    form_match = re.match(r"^(?:form\s+)?([a-z]{1,3})-?(\d{1,4})$", normalized)
+    if form_match:
+        prefix, suffix = form_match.groups()
+        aliases.add(f"{prefix}{suffix}")
+        aliases.add(f"{prefix}-{suffix}")
+        aliases.add(f"form {prefix}-{suffix}")
+    return [alias for alias in aliases if alias]
+
+
+@dataclass
+class GraphVertex:
+    name: str
+    normalized_name: str
+    aliases: list[str]
+    labels: list[str]
+    chunk_ids: list[str]
+
 
 class GraphRetriever(BaseRetriever):
     def __init__(self) -> None:
@@ -58,8 +96,8 @@ class GraphRetriever(BaseRetriever):
                 return None
             try:
                 self._age_pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=4)
-            except Exception as e:
-                logger.error(f"Failed to create asyncpg pool for Apache AGE: {e}")
+            except Exception as exc:
+                logger.error("Failed to create asyncpg pool for Apache AGE: %s", exc)
                 return None
         return self._age_pool
 
@@ -69,93 +107,158 @@ class GraphRetriever(BaseRetriever):
             self._pg_pool = await asyncpg.create_pool(dsn=dsn, min_size=1, max_size=4)
         return self._pg_pool
 
+    async def _load_vertices(self, age_conn: asyncpg.Connection, domain_id: str) -> list[GraphVertex]:
+        graph_name = _safe_graph_name()
+        params = json.dumps({"domain_id": domain_id})
+        rows = await age_conn.fetch(
+            f"""
+            SELECT * FROM cypher('{graph_name}', $$
+                MATCH (v)
+                WHERE v.domain_id = $domain_id
+                RETURN v.name, v.normalized_name, v.aliases, labels(v), v.chunk_ids
+            $$, $1) AS (
+                name agtype,
+                normalized_name agtype,
+                aliases agtype,
+                labels agtype,
+                chunk_ids agtype
+            );
+            """,
+            params,
+        )
+        vertices: list[GraphVertex] = []
+        for row in rows:
+            vertices.append(
+                GraphVertex(
+                    name=parse_agtype(row["name"]) or "",
+                    normalized_name=parse_agtype(row["normalized_name"]) or "",
+                    aliases=parse_agtype(row["aliases"]) or [],
+                    labels=parse_agtype(row["labels"]) or [],
+                    chunk_ids=parse_agtype(row["chunk_ids"]) or [],
+                )
+            )
+        return vertices
+
     async def search(self, query: str, domain_id: str, top_k: int) -> list[ChunkResult]:
-        """
-        Executes query-time entity extraction, traverses the graph in Apache AGE,
-        and fetches matching source chunks from PostgreSQL.
-        """
+        results, _ = await self.search_with_diagnostics(query, domain_id, top_k)
+        return results
+
+    async def search_with_diagnostics(self, query: str, domain_id: str, top_k: int) -> tuple[list[ChunkResult], dict]:
+        diagnostics = {
+            "enabled": bool(settings.AGE_DATABASE_DSN),
+            "matched_entities": 0,
+            "matched_chunk_ids": 0,
+            "returned_chunks": 0,
+            "skip_reason": None,
+            "query_entities": [],
+            "matches": [],
+        }
+
         age_pool = await self._get_age_pool()
         if not age_pool:
-            return []
+            diagnostics["skip_reason"] = "age_not_configured"
+            return [], diagnostics
+
+        normalized_query = normalize_query_text(query)
+        if not normalized_query:
+            diagnostics["skip_reason"] = "empty_query"
+            return [], diagnostics
 
         pg_pool = await self._get_pg_pool()
 
         try:
-            # 1. Query-Time NER: Retrieve all vertices in this domain and find matches
-            normalized_query = normalize_arabic(query)
-            if not normalized_query:
-                return []
-
-            params = json.dumps({"domain_id": domain_id})
-            
             async with age_pool.acquire() as age_conn:
                 await age_conn.execute("LOAD 'age';")
                 await age_conn.execute("SET search_path = ag_catalog, '$user', public;")
-                
-                # Fetch all vertices in the domain to perform fast substring entity matching
-                vertices_rows = await age_conn.fetch("""
-                    SELECT * FROM cypher('rag_graph', $$
-                        MATCH (v)
-                        WHERE v.domain_id = $domain_id
-                        RETURN v.normalized_name, labels(v)
-                    $$, $1) AS (normalized_name agtype, labels agtype);
-                """, params)
+                vertices = await self._load_vertices(age_conn, domain_id)
+                if not vertices:
+                    diagnostics["skip_reason"] = "graph_has_no_vertices"
+                    return [], diagnostics
 
-                matched_entities = []
-                for row in vertices_rows:
-                    norm_name = parse_agtype(row["normalized_name"])
-                    labels_list = parse_agtype(row["labels"])
-                    
-                    if norm_name and norm_name in normalized_query:
-                        label = labels_list[0] if labels_list else "Entity"
-                        matched_entities.append((norm_name, label))
+                query_entities = extract_query_entities(query)
+                if not query_entities and settings.QUERY_NER_MODE == "rules_first":
+                    query_entities = [
+                        normalize_query_text(vertex.name)
+                        for vertex in vertices
+                        if normalize_query_text(vertex.name)
+                        and _token_overlap(normalize_query_text(vertex.name), normalized_query) >= 0.25
+                    ][:8]
 
-                if not matched_entities:
-                    logger.info("No entities matched in query-time NER. Skipping graph traversal.")
-                    return []
+                diagnostics["query_entities"] = query_entities
+                if not query_entities:
+                    diagnostics["skip_reason"] = "query_ner_found_no_entities"
+                    return [], diagnostics
 
-                logger.info(f"Query-time NER matched: {matched_entities}")
+                candidate_matches: list[tuple[float, str, GraphVertex, str]] = []
+                for query_entity in query_entities:
+                    for vertex in vertices:
+                        candidate_names = {vertex.normalized_name, normalize_query_text(vertex.name)}
+                        candidate_names.update(normalize_query_text(alias) for alias in vertex.aliases or [])
+                        expanded_candidates = {
+                            alias
+                            for candidate in candidate_names
+                            if candidate
+                            for alias in _expand_aliases(candidate)
+                        }
+                        for candidate in expanded_candidates:
+                            score = _score_match(query_entity, candidate)
+                            if score >= settings.GRAPH_ENTITY_MATCH_THRESHOLD:
+                                candidate_matches.append((score, query_entity, vertex, candidate))
 
-                # 2. Graph Traversal: For each matched entity, do a 1-hop traversal to collect chunk_ids
-                chunk_ids = set()
-                for norm_name, label in matched_entities:
-                    traverse_params = json.dumps({
-                        "domain_id": domain_id,
-                        "normalized_name": norm_name
-                    }, ensure_ascii=False)
+                if not candidate_matches:
+                    # Second pass with relaxed threshold for content-word fallback entities
+                    relaxed_threshold = min(settings.GRAPH_ENTITY_MATCH_THRESHOLD, 0.3)
+                    for query_entity in query_entities:
+                        for vertex in vertices:
+                            candidate_names = {vertex.normalized_name, normalize_query_text(vertex.name)}
+                            candidate_names.update(normalize_query_text(alias) for alias in vertex.aliases or [])
+                            expanded_candidates = {
+                                alias
+                                for candidate in candidate_names
+                                if candidate
+                                for alias in _expand_aliases(candidate)
+                            }
+                            for candidate in expanded_candidates:
+                                score = _score_match(query_entity, candidate)
+                                if score >= relaxed_threshold:
+                                    candidate_matches.append((score, query_entity, vertex, candidate))
+                    if not candidate_matches:
+                        diagnostics["skip_reason"] = "query_entities_found_but_no_graph_match"
+                        return [], diagnostics
 
-                    # Optional match to handle entities with and without connections
-                    traverse_query = f"""
-                        SELECT * FROM cypher('rag_graph', $$
-                            MATCH (v:{label})
-                            WHERE v.normalized_name = $normalized_name AND v.domain_id = $domain_id
-                            OPTIONAL MATCH (v)-[r]-(neighbor)
-                            RETURN properties(v), properties(r), properties(neighbor)
-                        $$, $1) AS (v_props agtype, r_props agtype, n_props agtype);
-                    """
-                    traverse_rows = await age_conn.fetch(traverse_query, traverse_params)
+                candidate_matches.sort(key=lambda item: item[0], reverse=True)
+                selected_vertices: list[GraphVertex] = []
+                seen_keys: set[tuple[str, str]] = set()
+                for score, query_entity, vertex, candidate in candidate_matches:
+                    vertex_key = (vertex.normalized_name, "|".join(vertex.labels))
+                    if vertex_key in seen_keys:
+                        continue
+                    seen_keys.add(vertex_key)
+                    selected_vertices.append(vertex)
+                    diagnostics["matches"].append(
+                        {
+                            "query_entity": query_entity,
+                            "graph_name": vertex.name or vertex.normalized_name,
+                            "matched_candidate": candidate,
+                            "score": round(score, 3),
+                        }
+                    )
+                    if len(selected_vertices) >= settings.GRAPH_MAX_MATCHED_ENTITIES:
+                        break
 
-                    for row in traverse_rows:
-                        v_props = parse_agtype(row["v_props"])
-                        r_props = parse_agtype(row["r_props"])
-                        n_props = parse_agtype(row["n_props"])
+            chunk_ids: set[str] = set()
+            for vertex in selected_vertices:
+                chunk_ids.update(vertex.chunk_ids or [])
 
-                        if isinstance(v_props, dict):
-                            chunk_ids.update(v_props.get("chunk_ids", []))
-                        if isinstance(r_props, dict):
-                            chunk_ids.update(r_props.get("chunk_ids", []))
-                        if isinstance(n_props, dict):
-                            chunk_ids.update(n_props.get("chunk_ids", []))
-
+            diagnostics["matched_entities"] = len(selected_vertices)
+            diagnostics["matched_chunk_ids"] = len(chunk_ids)
             if not chunk_ids:
-                logger.info("No chunk_ids associated with matching graph entities.")
-                return []
+                diagnostics["skip_reason"] = "graph_match_found_but_no_chunk_ids"
+                return [], diagnostics
 
-            logger.info(f"Graph retrieval matched chunk_ids: {chunk_ids}")
-
-            # 3. Chunk Lookup: Retrieve full texts and metadata from PostgreSQL
             async with pg_pool.acquire() as pg_conn:
-                sql = """
+                rows = await pg_conn.fetch(
+                    """
                     SELECT
                         c.id,
                         c.document_id,
@@ -168,8 +271,15 @@ class GraphRetriever(BaseRetriever):
                     JOIN documents d ON c.document_id = d.id
                     WHERE c.domain_id = $1 AND c.id = ANY($2::text[])
                     LIMIT $3
-                """
-                chunks_rows = await pg_conn.fetch(sql, domain_id, list(chunk_ids), top_k)
+                    """,
+                    domain_id,
+                    list(chunk_ids),
+                    top_k,
+                )
+
+            if not rows:
+                diagnostics["skip_reason"] = "chunk_ids_found_but_missing_from_postgres"
+                return [], diagnostics
 
             results = [
                 ChunkResult(
@@ -180,18 +290,17 @@ class GraphRetriever(BaseRetriever):
                     chunk_index=row["chunk_index"] or 0,
                     page=row["page_num"],
                     text=row["text"],
-                    score=0.95,  # High score for explicit graph-linked context
+                    score=0.95,
                     source="graph",
                 )
-                for row in chunks_rows
+                for row in rows
             ]
-            
-            logger.info(f"Graph retrieval returned {len(results)} chunks")
-            return results
-
-        except Exception as e:
+            diagnostics["returned_chunks"] = len(results)
+            return results, diagnostics
+        except Exception:
             logger.exception("GraphRetriever failed during execution")
-            return []
+            diagnostics["skip_reason"] = "graph_execution_failed"
+            return [], diagnostics
 
     async def close(self) -> None:
         if self._age_pool is not None:

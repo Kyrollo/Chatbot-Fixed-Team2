@@ -33,7 +33,43 @@ KEYCLOAK_ZIP_URL = (
     "https://github.com/keycloak/keycloak/releases/download/26.5.0/keycloak-26.5.0.zip"
 )
 
-KEYCLOAK_REALM_URL = "http://localhost:8180/realms/rag-system"
+
+def get_keycloak_port() -> str:
+    kc_port = os.getenv("KEYCLOAK_PORT")
+    if kc_port:
+        return kc_port
+    dotenv_path = ROOT / ".env"
+    if dotenv_path.exists():
+        try:
+            for line in dotenv_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith("KEYCLOAK_PORT="):
+                    return line.split("=", 1)[1].strip()
+        except Exception:
+            pass
+    return "8180"
+
+
+def get_redis_port() -> int:
+    r_port = os.getenv("REDIS_PORT")
+    if r_port:
+        try:
+            return int(r_port)
+        except ValueError:
+            pass
+    dotenv_path = ROOT / ".env"
+    if dotenv_path.exists():
+        try:
+            for line in dotenv_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith("REDIS_PORT="):
+                    return int(line.split("=", 1)[1].strip())
+        except Exception:
+            pass
+    return 6379
+
+
+KEYCLOAK_REALM_URL = f"http://localhost:{get_keycloak_port()}/realms/rag-system"
 
 
 def _download_zip(url: str, dest_zip: Path) -> None:
@@ -153,7 +189,9 @@ def ensure_keycloak_home() -> Path:
     return KEYCLOAK_HOME
 
 
-def redis_ping(host: str = "localhost", port: int = 6379) -> bool:
+def redis_ping(host: str = "localhost", port: int | None = None) -> bool:
+    if port is None:
+        port = get_redis_port()
     try:
         import redis
 
@@ -194,13 +232,14 @@ def wait_for_keycloak(timeout: int = 180) -> bool:
 
 def start_redis() -> subprocess.Popen:
     server = ensure_redis()
-    if redis_ping():
-        print("  Redis already running on localhost:6379")
+    port = get_redis_port()
+    if redis_ping(port=port):
+        print(f"  Redis already running on localhost:{port}")
         return subprocess.Popen(["cmd", "/c", "echo", "redis-already-running"], stdout=subprocess.DEVNULL)
 
     conf = server.parent / "redis.windows.conf"
-    cmd = [str(server), str(conf)] if conf.exists() else [str(server)]
-    print(f"  Starting Redis ({server})...")
+    cmd = [str(server), str(conf), "--port", str(port)] if conf.exists() else [str(server), "--port", str(port)]
+    print(f"  Starting Redis ({server}) on port {port}...")
     if os.name == "nt":
         return subprocess.Popen(
             cmd,
@@ -209,13 +248,14 @@ def start_redis() -> subprocess.Popen:
             stderr=subprocess.STDOUT,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )
-    return subprocess.Popen([str(server)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return subprocess.Popen([str(server), "--port", str(port)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
 
 def start_keycloak() -> subprocess.Popen:
     home = ensure_keycloak_home()
+    kc_port = get_keycloak_port()
     if keycloak_ready():
-        print("  Keycloak already running on http://localhost:8180")
+        print(f"  Keycloak already running on http://localhost:{kc_port}")
         return subprocess.Popen(["cmd", "/c", "echo", "keycloak-already-running"], stdout=subprocess.DEVNULL)
 
     import_dir = home / "data" / "import"
@@ -224,10 +264,10 @@ def start_keycloak() -> subprocess.Popen:
 
     if os.name == "nt":
         kc = home / "bin" / "kc.bat"
-        cmd = [str(kc), "start-dev", "--http-port=8180", "--import-realm"]
+        cmd = [str(kc), "start-dev", f"--http-port={kc_port}", "--import-realm"]
     else:
         kc = home / "bin" / "kc.sh"
-        cmd = [str(kc), "start-dev", "--http-port=8180", "--import-realm"]
+        cmd = [str(kc), "start-dev", f"--http-port={kc_port}", "--import-realm"]
 
     env = os.environ.copy()
     env["KC_BOOTSTRAP_ADMIN_USERNAME"] = "admin"

@@ -212,6 +212,21 @@ def run_surya_ocr(image: Image.Image) -> dict:
 
     full_text = "\n".join(lines)
 
+    # GC cleanup: clear Surya models from memory immediately after execution
+    global _foundation_predictor, _recognition_predictor, _detection_predictor
+    _foundation_predictor = None
+    _recognition_predictor = None
+    _detection_predictor = None
+
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+
     return {
         "text":       full_text,
         "words":      words,

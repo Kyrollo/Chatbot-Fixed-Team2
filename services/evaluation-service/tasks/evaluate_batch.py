@@ -74,6 +74,7 @@ from db.queries import (
     advance_cursor,
     prune_old_cache_entries,
     MODERATION_THRESHOLD,
+    log_audit_event,
 )
 from tasks.moderation import should_flag_for_moderation
 
@@ -190,6 +191,13 @@ def evaluate_recent_answers(self):
         # same scoring behaviour as before this fix was applied.
         cached_chunks, reference = get_cached_context(row["query"], row["answer"])
         context = "\n\n".join(cached_chunks) if cached_chunks else None
+        if context is None:
+            logger.warning(
+                "query_id=%s has no cached context — faithfulness score will be "
+                "meaningless (context=None). Ensure EVALUATE_SYNC=true and "
+                "EVALUATE_ON_GENERATION=true in .env so all queries populate the cache.",
+                query_id,
+            )
 
         row_overall_scores: list[float] = []
         saved_log_ids: list = []
@@ -241,17 +249,25 @@ def evaluate_recent_answers(self):
                     reference=reference,
                 )
             ragas_full    = ragas_result["ragas_full"]
+            # Use answer_relevancy as completeness proxy when answer_correctness
+            # is None (no reference — normal for live traffic). Prevents overall
+            # from being computed on a single metric.
+            completeness_score = (
+                ragas_full.get("answer_correctness")
+                if ragas_full.get("answer_correctness") is not None
+                else ragas_full.get("answer_relevancy")
+            )
             ragas_overall = _overall_score({
                 "faithfulness": ragas_full.get("faithfulness"),
                 "relevance":    ragas_full.get("answer_relevancy"),
-                "completeness": ragas_full.get("answer_correctness"),
+                "completeness": completeness_score,
             })
             ragas_log_id = save_evaluation_result(
                 query_id=query_id,
                 model_used="ragas",
                 faithfulness_score=ragas_full.get("faithfulness"),
                 relevance_score=ragas_full.get("answer_relevancy"),
-                completeness_score=ragas_full.get("answer_correctness"),
+                completeness_score=completeness_score,
                 overall_score=ragas_overall,
                 raw_judge_response=ragas_full.get("raw_response"),
                 ragas_context_precision=ragas_full.get("context_precision"),
@@ -314,6 +330,22 @@ def evaluate_recent_answers(self):
         eval_runs_total.inc()
         eval_rows_evaluated.inc(evaluated)
         eval_rows_flagged.inc(flagged)
+
+    try:
+        log_audit_event(
+            event_type="batch_run",
+            actor="celery_beat",
+            query_id=None,
+            details={
+                "evaluated": evaluated,
+                "flagged": flagged,
+                "cursor_before": cursor_before,
+                "cursor_after": max_id_seen,
+                "pruned": pruned,
+            },
+        )
+    except Exception as exc:
+        logger.warning("Could not log batch run audit: %s", exc)
 
     logger.info(
         "evaluate_recent_answers complete — evaluated=%d flagged=%d "

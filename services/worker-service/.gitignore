@@ -1,0 +1,7 @@
+# .gitignore for worker-service
+__pycache__/
+*.pyc
+.env
+.venv/
+.vscode/
+*.log

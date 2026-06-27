@@ -39,17 +39,26 @@ async def router_health_check():
 async def login(payload: LoginRequest, db: DBSession):
     user_id = payload.user_id.strip()
     
-    # 1. Fetch user by user_id from database
+    # 1. Try to find user by exact ID first
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
+    
+    # 2. Fallback: try case-insensitive name match for dev shortcuts
+    #    e.g. "admin", "manager", "viewer" instead of the UUID
+    if not user:
+        from sqlalchemy import func as sql_func
+        result = await db.execute(
+            select(User).where(sql_func.lower(User.name) == user_id.lower())
+        )
+        user = result.scalar_one_or_none()
     
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Unauthorized: User ID '{user_id}' not found in the system database.",
+            detail=f"Unauthorized: User '{user_id}' not found. Use your User ID or name.",
         )
     
-    # 2. Map role to JWT realm roles
+    # 3. Map role to JWT realm roles
     roles = []
     if user.role == "system_admin":
         roles = ["system_admin", "domain_admin", "contributor", "reader"]
@@ -62,7 +71,7 @@ async def login(payload: LoginRequest, db: DBSession):
     else:
         roles = []
         
-    # 3. Mint JWT access token using the dev auth helper
+    # 4. Mint JWT access token using the dev auth helper
     token = dev_auth.mint_token(
         user_id=user.id,
         username=user.name.lower().replace(" ", "_"),

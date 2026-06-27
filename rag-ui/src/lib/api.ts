@@ -127,6 +127,7 @@ export const adminApi = {
 // --- Monitoring Service ---
 export const monitoringApi = {
   metrics: () => api.get<any>('/monitoring/metrics'),
+  reset: () => api.post<any>('/monitoring/reset'),
 }
 
 // Add these to src/lib/api.ts
@@ -147,4 +148,15 @@ export const qualityApi = {
   // Audit log
   auditLogs: (eventType?: string) =>
     api.get<{ logs: any[] }>(`/moderation/audit${eventType ? `?event_type=${eventType}` : ''}`),
+
+  // Judge health status
+  judgeHealth: () => api.get<any>('/evaluate/judge-health'),
+
+  // Full detail for one query: question, answer, citations count, and every
+  // judge evaluation recorded for that query_id. Backend endpoint needed —
+  // see note in QueryDetailDrawer.tsx.
+  queryDetail: (queryId: number) => api.get<any>(`/evaluate/logs/${queryId}`),
+
+  // Reset database tables
+  reset: () => api.post<any>('/evaluate/reset'),
 }

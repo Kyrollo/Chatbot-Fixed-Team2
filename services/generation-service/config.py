@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -5,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
+        env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -13,17 +15,18 @@ class Settings(BaseSettings):
     SERVICE_PORT: int = 8004
     HOST: str = "0.0.0.0"
 
-    REDIS_URL: str = "redis://localhost:6379/0"
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/domain_db"
+    REDIS_URL: str = f"redis://localhost:{os.getenv('REDIS_PORT', '6379')}/0"
+    DATABASE_URL: str = f"postgresql+asyncpg://postgres:postgres@localhost:{os.getenv('POSTGRES_PORT', '5432')}/domain_db"
     DOMAIN_SERVICE_URL: str = "http://localhost:8001"
     INTERNAL_API_KEY: str = "rag-internal-dev-key-change-in-prod"
     SYSTEM_ADMIN_ROLE: str = "system_admin"
 
     # Retrieval service
     RETRIEVAL_SERVICE_URL: str = "http://localhost:8003"
+    RETRIEVAL_TIMEOUT_SECONDS: int = 300
 
-    KEYCLOAK_ISSUER: str = "http://localhost:8180/realms/rag-system"
-    KEYCLOAK_REALM_URL: str = "http://localhost:8180/realms/rag-system"
+    KEYCLOAK_ISSUER: str = f"http://localhost:{os.getenv('KEYCLOAK_PORT', '8180')}/realms/rag-system"
+    KEYCLOAK_REALM_URL: str = f"http://localhost:{os.getenv('KEYCLOAK_PORT', '8180')}/realms/rag-system"
     KEYCLOAK_CLIENT_ID: str = "domain-service"
     KEYCLOAK_ALGORITHM: str = "RS256"
     KEYCLOAK_PUBLIC_KEY: str = ""
@@ -40,6 +43,10 @@ class Settings(BaseSettings):
     TOP_K_RERANK: int = 5
     DEFAULT_MAX_TOKENS: int = 512
     DEFAULT_TEMPERATURE: float = 0.2
+    EVALUATION_SERVICE_URL: str = "http://localhost:8005"
+    EVALUATE_ON_GENERATION: bool = True
+    EVALUATE_SYNC: bool = False
+    EVALUATION_TIMEOUT_SECONDS: int = 45
 
 
 @lru_cache(maxsize=1)

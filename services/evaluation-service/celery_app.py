@@ -23,6 +23,7 @@ load_dotenv(override=False)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+
 # How often Beat fires the evaluation task, in minutes.
 EVAL_SCHEDULE_MINUTES = int(os.getenv("EVAL_SCHEDULE_MINUTES", "30"))
 
@@ -43,17 +44,20 @@ celery_app.conf.update(
         "tasks.evaluate_batch.evaluate_recent_answers": {"queue": "evaluation"},
     },
     broker_connection_retry_on_startup=True,
+    worker_max_tasks_per_child=1,      # recycle evaluation worker after each batch run to reclaim RAM
+    worker_enable_remote_control=False,   # Don't monitor other workers' heartbeats
+    worker_timer_precision=10.0,          # Less aggressive timer checking
+    worker_hijack_root_logger=False,      # Prevent logger conflicts
+    worker_gossip=False,                  # Disable peer-to-peer worker gossip to stop heartbeat checks
 )
 
 # ------------------------------------------------------------------
 # Celery Beat schedule
 # ------------------------------------------------------------------
 celery_app.conf.beat_schedule = {
-    "evaluate-recent-answers": {
+    "evaluate-recent-answers-every-30min": {
         "task": "tasks.evaluate_batch.evaluate_recent_answers",
-        "schedule": EVAL_SCHEDULE_MINUTES * 60.0,   # seconds
-        # Alternative if you want a fixed time instead of "every N minutes":
-        # "schedule": crontab(minute=0),  # every hour, on the hour
+        "schedule": EVAL_SCHEDULE_MINUTES * 60, # seconds — set to 300 for testing
     },
 }
 

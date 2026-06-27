@@ -32,6 +32,16 @@ app.include_router(moderation_router, prefix="/moderation", tags=["moderation"])
 setup_metrics(app)
 
 
+@app.on_event("startup")
+async def startup() -> None:
+    try:
+        from db.queries import ensure_tables_exist
+        ensure_tables_exist()
+    except Exception as exc:
+        import logging
+        logging.getLogger("main").error("Failed to bootstrap tables: %s", exc)
+
+
 @app.on_event("shutdown")
 async def shutdown() -> None:
     await close_router_resources()

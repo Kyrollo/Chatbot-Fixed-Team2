@@ -1,3 +1,4 @@
+import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -8,19 +9,19 @@ class Settings(BaseSettings):
     )
 
     # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/domain_db"
-    sync_database_url: str = "postgresql://postgres:postgres@localhost:5432/domain_db"
+    database_url: str = f"postgresql+asyncpg://postgres:postgres@localhost:{os.getenv('POSTGRES_PORT', '5432')}/domain_db"
+    sync_database_url: str = f"postgresql://postgres:postgres@localhost:{os.getenv('POSTGRES_PORT', '5432')}/domain_db"
 
     # Redis
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str = f"redis://localhost:{os.getenv('REDIS_PORT', '6379')}/0"
 
     # File upload
     upload_dir: str = "data/uploads"
     max_size_mb: int = 50
 
     # Keycloak JWT validation (same realm as domain-service)
-    KEYCLOAK_ISSUER: str = "http://localhost:8180/realms/rag-system"
-    KEYCLOAK_REALM_URL: str = "http://localhost:8180/realms/rag-system"
+    KEYCLOAK_ISSUER: str = f"http://localhost:{os.getenv('KEYCLOAK_PORT', '8180')}/realms/rag-system"
+    KEYCLOAK_REALM_URL: str = f"http://localhost:{os.getenv('KEYCLOAK_PORT', '8180')}/realms/rag-system"
     KEYCLOAK_CLIENT_ID: str = "domain-service"
     KEYCLOAK_ALGORITHM: str = "RS256"
     KEYCLOAK_PUBLIC_KEY: str = ""

@@ -10,6 +10,7 @@ import DocumentsPage from './pages/DocumentsPage'
 import AdminPage from './pages/AdminPage'
 import MonitoringPage from './pages/MonitoringPage'
 import QualityPage from './pages/QualityPage'
+import LogsPage from './pages/LogsPage'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const token = useAuthStore((s) => s.token)
@@ -80,6 +81,14 @@ export default function App() {
           element={
             <RequireRole roles={['system_admin']}>
               <QualityPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="logs"
+          element={
+            <RequireRole roles={['system_admin']}>
+              <LogsPage />
             </RequireRole>
           }
         />

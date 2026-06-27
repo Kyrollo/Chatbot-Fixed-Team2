@@ -52,7 +52,8 @@ if sys.platform == "win32":
 
 logger = logging.getLogger(__name__)
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+_redis_port = os.getenv("REDIS_PORT", "6379")
+REDIS_URL = os.getenv("REDIS_URL", f"redis://localhost:{_redis_port}/0")
 
 # ------------------------------------------------------------------
 # Celery app
@@ -79,6 +80,10 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,            # one job at a time per worker (CPU-heavy)
     task_acks_late=True,                     # only ack after task completes (safe retry)
     broker_connection_retry_on_startup=True, # suppress CPendingDeprecationWarning in Celery 6+
+    worker_max_tasks_per_child=1,            # recycle worker child process after each task to reclaim memory
+    worker_enable_remote_control=False,      # Don't monitor other workers' heartbeats
+    worker_timer_precision=10.0,             # Less aggressive timer checking
+    worker_gossip=False,                     # Disable peer-to-peer worker gossip to stop heartbeat checks
 )
 
 
@@ -117,7 +122,7 @@ def _ensure_ocr_service_on_path() -> None:
     )
 
 
-@worker_process_init.connect
+# @worker_process_init.connect
 def _warm_up_ocr_on_worker_start(**kwargs):
     """
     Fires once when this worker process boots (before it starts consuming

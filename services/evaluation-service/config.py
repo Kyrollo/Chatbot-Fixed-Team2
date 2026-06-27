@@ -8,6 +8,7 @@ read raw from os.getenv() inside db/queries.py, which works but means there's
 no central place to see what env vars the service needs. Added them here for
 visibility. Also added Prometheus port setting.
 """
+import os
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -43,16 +44,19 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = "postgres"
     POSTGRES_DB: str = "domain_db"
     POSTGRES_HOST: str = "localhost"
-    POSTGRES_PORT: int = 5432
+    POSTGRES_PORT: int = int(os.getenv("POSTGRES_PORT", "5432"))
 
     # ── Redis / Celery ───────────────────────────────────────────────────────
-    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_URL: str = f"redis://localhost:{os.getenv('REDIS_PORT', '6379')}/0"
 
     # ── Evaluation pipeline ──────────────────────────────────────────────────
     EVAL_SCHEDULE_MINUTES: int = 30
     EVAL_LOOKBACK_MINUTES: int = 35
     EVAL_SAMPLE_RATE: float = 0.05
     MODERATION_THRESHOLD: float = 0.6
+    # When False: a judge LLM failure returns a 502 error instead of a mock
+    # score. Set to True only in local dev when no LLM is running.
+    ALLOW_MOCK_JUDGE: bool = False
 
     # ── RAGAS ────────────────────────────────────────────────────────────────
     RAGAS_JUDGE_MODEL: str = "groq/llama-3.3-70b-versatile"

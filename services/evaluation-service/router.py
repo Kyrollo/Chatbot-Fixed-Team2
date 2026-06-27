@@ -1,26 +1,15 @@
 """
 router.py
 ----------
-The live POST /evaluate endpoint.
+The live POST /evaluate endpoint plus supporting endpoints.
 
-FIX 1 — retrieved context persistence
-    After a successful evaluation, the request's context_chunks (and
-    optionally a reference answer) are saved via
-    db.queries.save_live_evaluation_cache() — keyed by SHA-256(query+answer)
-    — so evaluate_batch.py can recover them later when it samples that row
-    from rag_query_logs.
-
-    This save is wrapped in its own try/except and NEVER affects the live
-    response returned to the caller. If the DB write fails for any reason,
-    /evaluate still returns its score normally — it just means this call's
-    context won't be recoverable by the batch job (same as before this fix).
-
-FIX — metrics now recorded
-    eval_score_gauge and eval_latency were defined in metrics.py but never
-    observed anywhere. This is the natural place to record both: it is the
-    single site that times the judge call and receives its score.
-    Recorded with judge="custom_judge" so both judges' series land on the
-    same two Prometheus metrics with different label values.
+/evaluate/health          — service liveness check
+/evaluate/judge-health    — probe the LLM judge for reachability (Phase 7)
+/evaluate                 — score a (query, answer, context) triple
+/evaluate/logs            — recent evaluation logs
+/evaluate/logs/{query_id} — full detail for one query (question, answer,
+                             every judge evaluation) — Quality Dashboard
+                             detail drawer
 """
 import logging
 import time
@@ -28,7 +17,7 @@ import time
 from fastapi import APIRouter, HTTPException, status
 
 from config import settings
-from judge import JudgeService
+from judge import JudgeService, check_judge_health
 from metrics import eval_score_gauge, eval_latency
 from schemas import EvaluationRequest, EvaluationResponse
 
@@ -43,20 +32,41 @@ async def health() -> dict:
     return {"status": "ok", "service": settings.SERVICE_NAME}
 
 
+@router.get("/judge-health")
+async def judge_health() -> dict:
+    """
+    Probes the configured LLM judge (Groq or Ollama) for connectivity.
+    Returns:
+      { "reachable": bool, "route": "api"|"local", "model": str, "error": str|None }
+
+    Use this to verify the judge is available before triggering evaluations,
+    or to diagnose why /evaluate is returning errors (ALLOW_MOCK_JUDGE=False)
+    or mock scores (ALLOW_MOCK_JUDGE=True).
+    """
+    result = await check_judge_health()
+    return {
+        **result,
+        "allow_mock_judge": settings.ALLOW_MOCK_JUDGE,
+    }
+
+
 @router.post("", response_model=EvaluationResponse)
 async def evaluate(payload: EvaluationRequest) -> EvaluationResponse:
     start = time.perf_counter()
     try:
         result = await _judge.evaluate(payload)
+    except RuntimeError as exc:
+        # Judge unavailable and ALLOW_MOCK_JUDGE=False — surface it clearly
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Judge LLM unavailable: {exc}. Check /evaluate/judge-health.",
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Evaluation failed: {exc}",
         ) from exc
     finally:
-        # Recorded in finally so latency is captured even on failure —
-        # a slow failing call is exactly what you want visible in the
-        # histogram, not hidden by an early return.
         eval_latency.labels(judge="custom_judge").observe(
             time.perf_counter() - start
         )
@@ -64,11 +74,17 @@ async def evaluate(payload: EvaluationRequest) -> EvaluationResponse:
     # Score is only meaningful on success — outside the finally block.
     eval_score_gauge.labels(judge="custom_judge").set(result.score)
 
-    # FIX 1: persist context_chunks so evaluate_batch.py can recover
-    # them for this (query, answer) pair. Best-effort — never breaks
-    # the response already computed above.
+    # Persist context_chunks so evaluate_batch.py can recover them for
+    # this (query, answer) pair. Best-effort — never breaks the response.
     try:
-        from db.queries import save_live_evaluation_cache, ensure_tables_exist
+        from db.queries import (
+            save_live_evaluation_cache,
+            ensure_tables_exist,
+            log_audit_event,
+            save_evaluation_result,
+            flag_for_moderation,
+            MODERATION_THRESHOLD,
+        )
 
         ensure_tables_exist()
         save_live_evaluation_cache(
@@ -77,9 +93,43 @@ async def evaluate(payload: EvaluationRequest) -> EvaluationResponse:
             context_chunks=payload.context_chunks,
             reference=getattr(payload, "reference", None),
         )
+
+        log_audit_event(
+            event_type="live_evaluation",
+            actor=None,
+            query_id=payload.query_id,
+            details={
+                "score": result.score,
+                "model": result.model,
+                "route": result.route_used,
+            },
+        )
+
+        if payload.query_id:
+            # Compute overall score as the average of the available scores
+            valid_scores = [v for v in [result.faithfulness, result.score, result.completeness] if v is not None]
+            overall = sum(valid_scores) / len(valid_scores) if valid_scores else result.score
+
+            # Save the live evaluation result directly to evaluation_logs
+            log_id = save_evaluation_result(
+                query_id=payload.query_id,
+                model_used="custom_judge",
+                faithfulness_score=result.faithfulness,
+                relevance_score=result.score,
+                completeness_score=result.completeness,
+                overall_score=overall,
+                raw_judge_response=result.explanation,
+            )
+
+            # Flag for moderation if the score is below the threshold
+            if log_id and result.score < MODERATION_THRESHOLD:
+                flag_for_moderation(
+                    query_id=payload.query_id,
+                    evaluation_log_id=log_id,
+                )
     except Exception as exc:
         logger.warning(
-            "Could not cache context for batch re-evaluation "
+            "Could not cache context, persist evaluation or log audit for evaluation "
             "(live /evaluate response is unaffected): %s",
             exc,
         )
@@ -88,43 +138,46 @@ async def evaluate(payload: EvaluationRequest) -> EvaluationResponse:
 
 
 @router.get("/logs")
-async def get_evaluation_logs(limit: int = 50) -> dict:
-    """Returns the most recent evaluation log entries for the Quality Dashboard."""
+async def get_eval_logs():
+    """Returns recent evaluation logs."""
     try:
-        from db.queries import SessionLocal, EvaluationLog
-        from db.models import EvaluationLog as EvalLogModel
-        session = SessionLocal()
-        try:
-            rows = (
-                session.query(EvalLogModel)
-                .order_by(EvalLogModel.evaluated_at.desc())
-                .limit(limit)
-                .all()
-            )
-            logs = [
-                {
-                    "id": str(r.id),
-                    "query_id": r.query_id,
-                    "model_used": r.model_used,
-                    "faithfulness_score": r.faithfulness_score,
-                    "relevance_score": r.relevance_score,
-                    "completeness_score": r.completeness_score,
-                    "overall_score": r.overall_score,
-                    "ragas_context_precision": r.ragas_context_precision,
-                    "ragas_context_recall": r.ragas_context_recall,
-                    "ragas_context_entity_recall": r.ragas_context_entity_recall,
-                    "ragas_answer_correctness": r.ragas_answer_correctness,
-                    "ragas_answer_similarity": r.ragas_answer_similarity,
-                    "evaluated_at": r.evaluated_at.isoformat() if r.evaluated_at else None,
-                }
-                for r in rows
-            ]
-        finally:
-            session.close()
-        return {"logs": logs, "count": len(logs)}
+        from db.queries import list_evaluation_logs
+        logs = list_evaluation_logs()
+        return {"logs": logs}
     except Exception as exc:
-        logger.warning("get_evaluation_logs failed: %s", exc)
-        return {"logs": [], "count": 0}
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/logs/{query_id}")
+async def get_query_detail(query_id: int):
+    """
+    Full detail for one query — question, answer, and every judge
+    evaluation recorded for it. Powers the Quality Dashboard's detail
+    drawer (clicking a Query ID row in "Recent Judge Evaluations").
+    """
+    try:
+        from db.queries import get_query_detail as _get_query_detail
+        detail = _get_query_detail(query_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if detail is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No query log found for query_id={query_id}",
+        )
+    return detail
+
+
+@router.post("/reset")
+async def reset_eval_data():
+    """Clears all logs and moderation data in the evaluation DB."""
+    try:
+        from db.queries import reset_evaluation_data
+        reset_evaluation_data()
+        return {"status": "ok", "message": "Evaluation and logs reset successfully"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 async def close_router_resources() -> None:

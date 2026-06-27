@@ -85,14 +85,19 @@ _ensure_ocr_service_on_path()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# BUG FIX: these two imports were missing entirely in the previous version of
-# this file (lost during the Camelot/table-extraction rewrite), even though
-# both _extract_pdf() and _extract_image() call them below. That caused:
-#   NameError: name 'pdf_page_to_image' is not defined
-# on every PDF page / image that needed OCR (i.e. every scanned page).
-# ──────────────────────────────────────────────────────────────────────────────
-from ocr_service.pipeline import run_ocr_on_image
-from ocr_service.preprocessing.image_processor import pdf_page_to_image
+# Check if ocr_service is available in the environment without importing it
+try:
+    import importlib.util
+    HAS_OCR = importlib.util.find_spec("ocr_service") is not None
+except Exception:
+    HAS_OCR = False
+
+if not HAS_OCR:
+    logger.warning("ocr_service not found. OCR is disabled.")
+
+ENABLE_TABLE_EXTRACTION = os.getenv("ENABLE_TABLE_EXTRACTION", "true").lower() in {"1", "true", "yes"}
+ENABLE_OCR = os.getenv("ENABLE_OCR", "true").lower() in {"1", "true", "yes"} and HAS_OCR
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -105,6 +110,7 @@ from tasks.table_utils import (
     detect_table_title,
     markdown_table_to_data,
     df_to_data,
+    preprocess_table,
 )
 
 
@@ -129,23 +135,43 @@ def extract_text(file_path: str, mime_type: str | None = None) -> list[dict]:
     """
     ext = os.path.splitext(file_path)[1].lower()
 
-    if ext == ".pdf":
-        return _extract_pdf(file_path)
-    elif ext == ".docx":
-        return _extract_docx(file_path)
-    elif ext == ".doc":
-        return _extract_doc(file_path)
-    elif ext in (".xlsx", ".xls"):
-        return _extract_excel(file_path)
-    elif ext == ".csv":
-        return _extract_csv(file_path)
-    elif ext in (".png", ".jpg", ".jpeg"):
-        return _extract_image(file_path)
-    else:
-        raise ValueError(
-            f"Unsupported file extension: '{ext}'. "
-            "Supported: .pdf, .docx, .doc, .xlsx, .xls, .csv, .png, .jpg, .jpeg"
-        )
+    try:
+        if ext == ".pdf":
+            res = _extract_pdf(file_path)
+        elif ext == ".docx":
+            res = _extract_docx(file_path)
+        elif ext == ".doc":
+            res = _extract_doc(file_path)
+        elif ext in (".xlsx", ".xls"):
+            res = _extract_excel(file_path)
+        elif ext == ".csv":
+            res = _extract_csv(file_path)
+        elif ext in (".png", ".jpg", ".jpeg"):
+            res = _extract_image(file_path)
+        else:
+            raise ValueError(
+                f"Unsupported file extension: '{ext}'. "
+                "Supported: .pdf, .docx, .doc, .xlsx, .xls, .csv, .png, .jpg, .jpeg"
+            )
+        return res
+    finally:
+        # Clear OCR models from memory after document extraction is done to free RAM
+        try:
+            if "ocr_service.engines.paddle_engine" in sys.modules:
+                from ocr_service.engines.paddle_engine import _models as paddle_models
+                if paddle_models:
+                    paddle_models.clear()
+                    logger.info("Cleared PaddleOCR models from memory.")
+        except Exception:
+            pass
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -181,6 +207,8 @@ def _extract_tables_camelot(file_path: str, page_num: int, page_height: float) -
 
     Falls back to empty list if Camelot fails.
     """
+    if not ENABLE_TABLE_EXTRACTION:
+        return []
     try:
         import camelot
     except ImportError:
@@ -191,10 +219,10 @@ def _extract_tables_camelot(file_path: str, page_num: int, page_height: float) -
         return []
 
     page_str = str(page_num + 1)  # Camelot uses 1-indexed pages
-    results = []
+    all_candidates = []
 
+    # 1. Try lattice flavor
     try:
-        # Try lattice first (ruled/bordered tables — highest accuracy)
         tables = camelot.read_pdf(file_path, pages=page_str, flavor='lattice')
         for t in tables:
             accuracy = t.parsing_report.get('accuracy', 0)
@@ -209,49 +237,95 @@ def _extract_tables_camelot(file_path: str, page_num: int, page_height: float) -
                         px1 = cx1
                         py1 = page_height - cy0
                         bbox = (px0, py0, px1, py1)
-                    results.append({
+                    all_candidates.append({
                         'data': data,
                         'accuracy': accuracy,
                         'bbox': bbox,
                         'flavor': 'lattice',
                     })
-
-        # If no good lattice tables, try stream (borderless tables)
-        if not results:
-            tables = camelot.read_pdf(file_path, pages=page_str, flavor='stream')
-            for t in tables:
-                accuracy = t.parsing_report.get('accuracy', 0)
-                if accuracy >= 30:
-                    data = df_to_data(t.df)
-                    if len(data) >= 2:
-                        bbox = t._bbox if hasattr(t, '_bbox') else (0, 0, 0, 0)
-                        if bbox and bbox != (0, 0, 0, 0):
-                            cx0, cy0, cx1, cy1 = bbox
-                            px0 = cx0
-                            py0 = page_height - cy1
-                            px1 = cx1
-                            py1 = page_height - cy0
-                            bbox = (px0, py0, px1, py1)
-                        results.append({
-                            'data': data,
-                            'accuracy': accuracy,
-                            'bbox': bbox,
-                            'flavor': 'stream',
-                        })
-
-        if results:
-            logger.info(
-                "Camelot page %d: found %d table(s), accuracies: %s",
-                page_num + 1, len(results),
-                [f"{r['accuracy']:.1f}% ({r['flavor']})" for r in results],
-            )
-
     except Exception as e:
         logger.warning(
-            "Camelot failed on page %d: %s — will fall back to PyMuPDF",
+            "Camelot lattice failed on page %d: %s",
             page_num + 1, e,
         )
-        return []
+
+    # 2. Try stream flavor
+    try:
+        tables = camelot.read_pdf(file_path, pages=page_str, flavor='stream')
+        for t in tables:
+            accuracy = t.parsing_report.get('accuracy', 0)
+            if accuracy >= 30:
+                data = df_to_data(t.df)
+                if len(data) >= 2:
+                    bbox = t._bbox if hasattr(t, '_bbox') else (0, 0, 0, 0)
+                    if bbox and bbox != (0, 0, 0, 0):
+                        cx0, cy0, cx1, cy1 = bbox
+                        px0 = cx0
+                        py0 = page_height - cy1
+                        px1 = cx1
+                        py1 = page_height - cy0
+                        bbox = (px0, py0, px1, py1)
+                    all_candidates.append({
+                        'data': data,
+                        'accuracy': accuracy,
+                        'bbox': bbox,
+                        'flavor': 'stream',
+                    })
+    except Exception as e:
+        logger.warning(
+            "Camelot stream failed on page %d: %s",
+            page_num + 1, e,
+        )
+
+    # 3. Deduplicate by bbox overlap (keep higher accuracy)
+    def bbox_overlap(boxA, boxB):
+        ax0, ay0, ax1, ay1 = boxA
+        bx0, by0, bx1, by1 = boxB
+        
+        # Calculate intersection box
+        ix0 = max(ax0, bx0)
+        iy0 = max(ay0, by0)
+        ix1 = min(ax1, bx1)
+        iy1 = min(ay1, by1)
+        
+        if ix1 <= ix0 or iy1 <= iy0:
+            return 0.0
+        
+        intersection_area = (ix1 - ix0) * (iy1 - iy0)
+        areaA = (ax1 - ax0) * (ay1 - ay0)
+        areaB = (bx1 - bx0) * (by1 - by0)
+        
+        min_area = min(areaA, areaB)
+        if min_area <= 0:
+            return 0.0
+            
+        return intersection_area / min_area
+
+    # Sort candidates by accuracy descending
+    sorted_candidates = sorted(all_candidates, key=lambda x: x['accuracy'], reverse=True)
+    results = []
+    for c in sorted_candidates:
+        c_bbox = c['bbox']
+        overlap_found = False
+        if c_bbox and c_bbox != (0, 0, 0, 0):
+            for r in results:
+                r_bbox = r['bbox']
+                if r_bbox and r_bbox != (0, 0, 0, 0):
+                    if bbox_overlap(c_bbox, r_bbox) > 0.5:
+                        overlap_found = True
+                        break
+        if not overlap_found:
+            results.append(c)
+
+    # Restore top-to-bottom spatial sorting for results
+    results.sort(key=lambda x: (x['bbox'][1] if x['bbox'] else 0, x['bbox'][0] if x['bbox'] else 0))
+
+    if results:
+        logger.info(
+            "Camelot page %d: found %d table(s), accuracies: %s",
+            page_num + 1, len(results),
+            [f"{r['accuracy']:.1f}% ({r['flavor']})" for r in results],
+        )
 
     return results
 
@@ -304,24 +378,71 @@ def _extract_pdf(file_path: str) -> list[dict]:
             page_height = page.rect.height
 
             # Try Camelot lattice/stream first (normalized to PyMuPDF coordinates)
-            camelot_tables = _extract_tables_camelot(file_path, page_num, page_height)
+            camelot_tables = []
+            if ENABLE_TABLE_EXTRACTION:
+                camelot_tables = _extract_tables_camelot(file_path, page_num, page_height)
 
-            # Fallback to PyMuPDF's layout finder if Camelot failed or found nothing
-            if not camelot_tables:
-                camelot_tables = _extract_tables_pymupdf_fallback(page, page_num)
+                # Fallback to PyMuPDF's layout finder if Camelot failed or found nothing
+                if not camelot_tables:
+                    camelot_tables = _extract_tables_pymupdf_fallback(page, page_num)
 
 
-            # ── Build text blocks from PyMuPDF ──
-            raw_blocks = page.get_text("blocks")
+            # ── Build text blocks from PyMuPDF layout, splitting blocks that overlap with tables ──
+            text_layout = page.get_text("dict")
             text_block_dicts = []
-            for b in raw_blocks:
-                if b[6] != 0:  # Skip image blocks
+            for block in text_layout.get("blocks", []):
+                if block.get("type") != 0:
                     continue
-                bbox = (b[0], b[1], b[2], b[3])
-                text = b[4].strip()
-                if not text:
-                    continue
-                text_block_dicts.append({"bbox": bbox, "text": text, "y0": bbox[1]})
+                
+                current_group = []
+                current_bbox = None
+                
+                for line in block.get("lines", []):
+                    bbox = line["bbox"]
+                    rect_l = fitz.Rect(*bbox)
+                    
+                    # Check overlap with any table
+                    is_inside_table = False
+                    for tbl in camelot_tables:
+                        tbl_bbox = tbl.get('bbox')
+                        if not tbl_bbox or len(tbl_bbox) < 4:
+                            continue
+                        try:
+                            rect_t = fitz.Rect(*tbl_bbox)
+                            overlap = rect_l & rect_t
+                            if overlap.is_valid and (overlap.get_area() > 0.3 * rect_l.get_area()):
+                                is_inside_table = True
+                                break
+                        except Exception:
+                            continue
+                    
+                    if not is_inside_table:
+                        line_text = "".join(span["text"] for span in line.get("spans", []))
+                        if line_text.strip():
+                            current_group.append(line_text)
+                            if current_bbox is None:
+                                current_bbox = list(bbox)
+                            else:
+                                current_bbox[0] = min(current_bbox[0], bbox[0])
+                                current_bbox[1] = min(current_bbox[1], bbox[1])
+                                current_bbox[2] = max(current_bbox[2], bbox[2])
+                                current_bbox[3] = max(current_bbox[3], bbox[3])
+                    else:
+                        if current_group:
+                            text_block_dicts.append({
+                                "bbox": tuple(current_bbox),
+                                "text": "\n".join(current_group).strip(),
+                                "y0": current_bbox[1]
+                            })
+                            current_group = []
+                            current_bbox = None
+                
+                if current_group:
+                    text_block_dicts.append({
+                        "bbox": tuple(current_bbox),
+                        "text": "\n".join(current_group).strip(),
+                        "y0": current_bbox[1]
+                    })
 
             # ── Convert Camelot tables to NL + MD blocks ──
             table_blocks = []
@@ -333,61 +454,39 @@ def _extract_pdf(file_path: str) -> list[dict]:
                     # Detect table title from text blocks above
                     title = detect_table_title(text_block_dicts, tbl_bbox)
 
-                    # Generate NL row descriptions
-                    nl_rows = table_to_nl_rows(
-                        tbl_data, table_title=title,
-                        page_num=page_num + 1, source_type="pdf",
-                    )
-                    nl_chunks = group_nl_rows(nl_rows)
-
-                    # Generate markdown version for BM25
+                    # Generate markdown version for BM25 using preprocessed headers/rows
+                    headers, data_rows = preprocess_table(tbl_data)
                     md_lines = []
-                    for r_idx, row in enumerate(tbl_data):
-                        vals = [str(cell or "").replace("\n", " ").replace("|", "\\|") for cell in row]
-                        md_lines.append("| " + " | ".join(vals) + " |")
-                        if r_idx == 0:
-                            md_lines.append("| " + " | ".join(["---"] * len(vals)) + " |")
+                    if headers and data_rows:
+                        md_lines.append("| " + " | ".join(headers) + " |")
+                        md_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+                        for row in data_rows:
+                            vals = [str(cell or "").replace("\n", " ").replace("|", "\\|") for cell in row]
+                            md_lines.append("| " + " | ".join(vals) + " |")
+                    else:
+                        for r_idx, row in enumerate(tbl_data):
+                            vals = [str(cell or "").replace("\n", " ").replace("|", "\\|") for cell in row]
+                            md_lines.append("| " + " | ".join(vals) + " |")
+                            if r_idx == 0:
+                                md_lines.append("| " + " | ".join(["---"] * len(vals)) + " |")
                     md_table = "\n".join(md_lines)
 
                     # Calculate vertical position for sorting
                     y0 = tbl_bbox[1] if tbl_bbox and len(tbl_bbox) >= 2 else 0
 
-                    # Add NL chunks
-                    for nl_chunk in nl_chunks:
-                        table_blocks.append({
-                            "bbox": tbl_bbox,
-                            "text": f"[TABLE_NL]\n{nl_chunk}\n[/TABLE_NL]",
-                            "y0": y0,
-                        })
+                    # Add title prefix inside the TABLE_MD block if available
+                    title_prefix = f"Table: {title}\n" if title and title != "Table" else ""
 
                     # Add MD version
                     table_blocks.append({
                         "bbox": tbl_bbox,
-                        "text": f"[TABLE_MD]\n{md_table}\n[/TABLE_MD]",
-                        "y0": y0 + 0.1,  # Slightly after NL for sort order
+                        "text": f"[TABLE_MD]\n{title_prefix}{md_table}\n[/TABLE_MD]",
+                        "y0": y0,
                     })
 
-            # ── Filter text blocks that overlap with tables ──
-            filtered_text_blocks = []
-            for tb in text_block_dicts:
-                rect_b = fitz.Rect(*tb["bbox"])
-                is_inside_table = False
-
-                for tbl in camelot_tables:
-                    tbl_bbox = tbl.get('bbox')
-                    if not tbl_bbox or len(tbl_bbox) < 4:
-                        continue
-                    try:
-                        rect_t = fitz.Rect(*tbl_bbox)
-                        overlap = rect_b & rect_t
-                        if overlap.is_valid and (overlap.get_area() > 0.5 * rect_b.get_area()):
-                            is_inside_table = True
-                            break
-                    except Exception:
-                        continue
-
-                if not is_inside_table:
-                    filtered_text_blocks.append(tb)
+            # Since text_block_dicts only contains groups of lines that are completely outside the tables,
+            # no further filtering is needed.
+            filtered_text_blocks = text_block_dicts
 
             # ── Combine and sort vertically ──
             all_elements = table_blocks + filtered_text_blocks
@@ -404,24 +503,31 @@ def _extract_pdf(file_path: str) -> list[dict]:
                     page_num + 1, len(page_text), len(camelot_tables),
                 )
             else:
-                # Scanned page fallback
-                logger.info(
-                    "PDF page %d: no text — running OCR pipeline", page_num + 1
-                )
-                img    = pdf_page_to_image(file_path, page_num=page_num, dpi=200)
-                result = run_ocr_on_image(img, page_num=page_num + 1, deskew=True)
-
-                if result["text"]:
-                    pages.append({"page": page_num + 1, "text": result["text"]})
+                if ENABLE_OCR:
+                    # Scanned page fallback
                     logger.info(
-                        "  Page %d OCR → model=%s  confidence=%.3f",
-                        page_num + 1,
-                        result["model_used"],
-                        result["confidence_score"],
+                        "PDF page %d: no text — running OCR pipeline", page_num + 1
                     )
+                    from ocr_service.preprocessing.image_processor import pdf_page_to_image
+                    from ocr_service.pipeline import run_ocr_on_image
+                    img    = pdf_page_to_image(file_path, page_num=page_num, dpi=200)
+                    result = run_ocr_on_image(img, page_num=page_num + 1, deskew=True)
+
+                    if result["text"]:
+                        pages.append({"page": page_num + 1, "text": result["text"]})
+                        logger.info(
+                            "  Page %d OCR → model=%s  confidence=%.3f",
+                            page_num + 1,
+                            result["model_used"],
+                            result["confidence_score"],
+                        )
+                    else:
+                        logger.warning(
+                            "  Page %d: no text after OCR — skipping", page_num + 1
+                        )
                 else:
                     logger.warning(
-                        "  Page %d: no text after OCR — skipping", page_num + 1
+                        "  Page %d: no text found and OCR is disabled — skipping", page_num + 1
                     )
     finally:
         doc.close()
@@ -441,7 +547,11 @@ def _extract_image(file_path: str) -> list[dict]:
     """
     Routes a standalone image file (.png / .jpg / .jpeg) through the OCR pipeline.
     """
+    if not ENABLE_OCR:
+        logger.warning("Image OCR is disabled — cannot extract text from image.")
+        return []
 
+    from ocr_service.pipeline import run_ocr_on_image
     img    = Image.open(file_path).convert("RGB")
     result = run_ocr_on_image(img, page_num=1, deskew=True)
 
@@ -511,30 +621,10 @@ def _extract_docx(file_path: str) -> list[dict]:
             md_text = format_docx_table(table)
 
             if md_text.strip():
-                # Parse markdown back to data for NL conversion
-                table_data = markdown_table_to_data(md_text)
-                table_title = last_heading if last_heading else "Table"
-
-                if table_data and len(table_data) >= 2:
-                    # Generate NL descriptions
-                    nl_rows = table_to_nl_rows(
-                        table_data, table_title=table_title,
-                        page_num=segment_index, source_type="docx",
-                    )
-                    nl_chunks = group_nl_rows(nl_rows)
-
-                    # Add NL chunks
-                    for nl_chunk in nl_chunks:
-                        current_segment.append(f"[TABLE_NL]\n{nl_chunk}\n[/TABLE_NL]")
-                        char_count += len(nl_chunk)
-
-                    # Add MD version for BM25
-                    current_segment.append(f"[TABLE_MD]\n{md_text}\n[/TABLE_MD]")
-                    char_count += len(md_text)
-                else:
-                    # Fallback: keep as old-style [TABLE] block
-                    current_segment.append(f"[TABLE]\n{md_text}\n[/TABLE]")
-                    char_count += len(md_text)
+                # Add MD version for BM25
+                title_prefix = f"Table: {last_heading}\n" if last_heading else ""
+                current_segment.append(f"[TABLE_MD]\n{title_prefix}{md_text}\n[/TABLE_MD]")
+                char_count += len(md_text)
 
                 if char_count > 1500:
                     pages.append({"page": segment_index, "text": "\n".join(current_segment)})
@@ -663,23 +753,6 @@ def _extract_excel(file_path: str) -> list[dict]:
         md_batch_size = 25
 
         # Process in batches for NL descriptions
-        for i in range(0, len(df), batch_size):
-            sub_df = df.iloc[i: i + batch_size]
-            data = df_to_data(sub_df)
-
-            nl_rows = table_to_nl_rows(
-                data, table_title=f"Sheet: {sheet_name}",
-                page_num=page_index, source_type="xlsx",
-            )
-            nl_chunks = group_nl_rows(nl_rows)
-
-            for nl_chunk in nl_chunks:
-                pages.append({
-                    "page": page_index,
-                    "text": f"Sheet: {sheet_name}\n[TABLE_NL]\n{nl_chunk}\n[/TABLE_NL]",
-                })
-                page_index += 1
-
         # Also produce MD chunks for BM25
         for i in range(0, len(df), md_batch_size):
             sub_df = df.iloc[i: i + md_batch_size]
@@ -743,24 +816,6 @@ def _extract_csv(file_path: str) -> list[dict]:
             continue
 
         total_rows += len(chunk_df)
-
-        # Generate NL descriptions in sub-batches
-        for i in range(0, len(chunk_df), nl_batch_size):
-            sub_df = chunk_df.iloc[i: i + nl_batch_size]
-            data = df_to_data(sub_df)
-
-            nl_rows = table_to_nl_rows(
-                data, table_title="CSV Data",
-                page_num=page_index, source_type="csv",
-            )
-            nl_chunks = group_nl_rows(nl_rows)
-
-            for nl_chunk in nl_chunks:
-                pages.append({
-                    "page": page_index,
-                    "text": f"[TABLE_NL]\n{nl_chunk}\n[/TABLE_NL]",
-                })
-                page_index += 1
 
         # Also produce MD chunk for BM25 (one per 500-row stream chunk)
         md_table = _df_to_markdown(chunk_df)

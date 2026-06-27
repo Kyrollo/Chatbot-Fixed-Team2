@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -11,20 +12,18 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+
+def _validate_model_path(model_name: str) -> Path:
+    model_path = Path(model_name)
+    if not model_path.exists():
+        raise FileNotFoundError(
+            f"Embedding model path does not exist: {model_name}. "
+            "Set EMBEDDING_MODEL to a downloaded local model directory."
+        )
+    return model_path
+
 # ---------------------------------------------------------------------------
 # Disable memory-mapping in safetensors on Windows (same patch as hf_env.py).
-#
-# safetensors.safe_open() defaults to mmap, which requires Windows commit
-# charge equal to the mapped file size.  When multiple services are running,
-# this exhausts the commit limit, causing:
-#     OSError: The paging file is too small … (os error 1455)
-# or  [WinError 1114] A dynamic link library (DLL) initialization routine failed.
-#
-# Strategy (three tiers):
-#   1. Try safe_open(disable_mmap=True) — works on safetensors >= 0.4.5
-#   2. Try safe_open() without disable_mmap — works if paging file has room
-#   3. Fall back to _SafeOpenInMemory — reads the .safetensors file using
-#      plain Python file I/O (struct + read), no mmap, no commit charge
 # ---------------------------------------------------------------------------
 if os.name == "nt":
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
@@ -36,20 +35,11 @@ if os.name == "nt":
         _orig_safe_open = _st.safe_open
 
         class _SafeOpenInMemory:
-            """Drop-in for safe_open() — reads entire file into RAM (no mmap).
-
-            The safetensors binary format is:
-              [8 bytes: header_size as uint64 LE]
-              [header_size bytes: JSON metadata]
-              [remaining bytes: raw tensor data]
-            """
-
             _DTYPE_MAP = None
 
             def __init__(self, filename, framework="pt", device="cpu"):
                 import json
                 import struct
-
                 import torch
 
                 if _SafeOpenInMemory._DTYPE_MAP is None:
@@ -106,7 +96,6 @@ if os.name == "nt":
                 try:
                     return _orig_safe_open(*args, **kwargs)
                 except OSError:
-                    # Paging file exhausted — fall back to pure-Python reader
                     return _SafeOpenInMemory(*args, **kwargs)
 
         _st.safe_open = _safe_open_no_mmap
@@ -121,25 +110,39 @@ class EmbeddingService:
     Query prefix must be "query: " — the worker service indexes documents
     with "passage: " prefix. Both sides must stay consistent or retrieval
     quality degrades significantly.
-
-    NOTE: SentenceTransformer (and therefore PyTorch) is imported lazily
-    inside __init__, NOT at module level. This prevents ~3 GB of PyTorch
-    DLLs from loading at uvicorn startup, avoiding WinError 1114 / 1455
-    when multiple services compete for Windows commit charge.
     """
 
     def __init__(self) -> None:
-        logger.info("Loading embedding model: %s", settings.EMBEDDING_MODEL)
-        from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+        self._model = None
+        self._lock = asyncio.Lock()
 
-        self._model = SentenceTransformer(settings.EMBEDDING_MODEL)
-        logger.info("Embedding model ready.")
+    @property
+    def is_ready(self) -> bool:
+        return self._model is not None
 
-    def embed_query(self, query: str) -> list[float]:
-        vector = self._model.encode(
+    def _load_model(self) -> None:
+        import time
+        t0 = time.perf_counter()
+        model_path = _validate_model_path(settings.EMBEDDING_MODEL)
+        logger.info("Loading embedding model in ONNX Runtime: %s (exists=%s)", model_path, model_path.exists())
+        from services.onnx_client import ONNXEmbeddingClient
+        self._model = ONNXEmbeddingClient(str(model_path))
+        logger.info("Embedding model ready (ONNX). (took %.2fs)", time.perf_counter() - t0)
+
+    async def warmup(self) -> None:
+        if self._model is None:
+            async with self._lock:
+                if self._model is None:
+                    await asyncio.to_thread(self._load_model)
+
+    async def embed_query(self, query: str) -> list[float]:
+        if self._model is None:
+            await self.warmup()
+
+        vector = await asyncio.to_thread(
+            self._model.encode,
             f"query: {query}",
             normalize_embeddings=True,
-            show_progress_bar=False,
         )
         return vector.tolist()
 
