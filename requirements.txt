@@ -141,3 +141,7 @@ onnxruntime>=1.18,<2.0
 # -- Monitoring & Metrics --------------------------------------------------------
 prometheus_client>=0.20.0
 prometheus-fastapi-instrumentator>=7.1.0
+
+# -- Testing & Load Testing ------------------------------------------------------
+pytest>=8.2,<9.0
+locust>=2.29,<3.0
