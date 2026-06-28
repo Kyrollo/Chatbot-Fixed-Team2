@@ -1,0 +1,128 @@
+groups:
+  - name: rag-platform-alerts
+    rules:
+
+      # ── 1. Judge LLM unreachable ─────────────────────────────────────────────
+      - alert: JudgeLLMUnreachable
+        expr: eval_judge_reachable == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Judge LLM unreachable ({{ $labels.judge_type }})"
+          description: >
+            The {{ $labels.judge_type }} judge LLM has been reporting failures
+            for more than 2 minutes. Evaluations will be queued but not processed.
+          runbook: "https://your-wiki/runbooks/judge-llm-down"
+
+      # ── 2. Evaluation failure rate > 10% over 15 minutes ────────────────────
+      - alert: EvalFailureRateHigh
+        expr: >
+          sum(rate(eval_requests_total{status="failure"}[15m])) by (judge_type)
+          /
+          sum(rate(eval_requests_total[15m])) by (judge_type)
+          > 0.10
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Evaluation failure rate > 10% ({{ $labels.judge_type }})"
+          description: >
+            More than 10% of {{ $labels.judge_type }} evaluation requests are
+            failing over the last 15 minutes.
+          runbook: "https://your-wiki/runbooks/eval-failure-rate"
+
+      # ── 3. Generation service p95 latency > 5 s ─────────────────────────────
+      - alert: GenerationLatencyHigh
+        expr: >
+          histogram_quantile(
+            0.95,
+            sum(rate(http_request_duration_seconds_bucket{
+              service="generation-service",
+              endpoint=~".*/generate.*"
+            }[5m])) by (le)
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "generation-service p95 latency above 5 s"
+          description: >
+            The 95th-percentile request latency on generation-service has
+            exceeded 5 seconds for the last 5 minutes.
+          runbook: "https://your-wiki/runbooks/generation-latency"
+
+      # ── 4. Any service crash-looping (process gone + back up repeatedly) ────
+      #    Proxy: HTTP 5xx rate spikes for a sustained period
+      - alert: ServiceHighErrorRate
+        expr: >
+          sum(rate(http_requests_total{status_code=~"5.."}[5m])) by (service)
+          /
+          sum(rate(http_requests_total[5m])) by (service)
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High 5xx error rate on {{ $labels.service }}"
+          description: >
+            {{ $labels.service }} is returning 5xx responses on more than 5%
+            of requests for the last 5 minutes — possible crash-loop or
+            unhandled exception storm.
+          runbook: "https://your-wiki/runbooks/service-error-rate"
+
+      # ── 5. Celery worker down ────────────────────────────────────────────────
+      - alert: CeleryWorkerDown
+        expr: celery_worker_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Celery worker-service is down"
+          description: >
+            The worker-service Celery process has not reported as ready for
+            more than 2 minutes. Document ingestion is stalled.
+          runbook: "https://your-wiki/runbooks/celery-worker-down"
+
+      # ── 6. Retrieval stage error spike ──────────────────────────────────────
+      - alert: RetrievalStageErrors
+        expr: sum(rate(retrieval_stage_errors_total[5m])) by (stage) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Retrieval stage '{{ $labels.stage }}' is throwing errors"
+          description: >
+            The {{ $labels.stage }} stage of the retrieval pipeline is failing
+            at more than 0.1 errors/second for 5 minutes.
+          runbook: "https://your-wiki/runbooks/retrieval-stage-errors"
+
+      # ── 7. Retrieval p95 latency > 3 s ──────────────────────────────────────
+      - alert: RetrievalLatencyHigh
+        expr: >
+          histogram_quantile(
+            0.95,
+            sum(rate(retrieval_stage_latency_seconds_bucket{stage="full_pipeline"}[5m])) by (le)
+          ) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Retrieval pipeline p95 latency above 3 s"
+          description: >
+            End-to-end retrieval (embed → dense → sparse → RRF → rerank) is
+            taking more than 3 seconds at p95. Check reranker or Qdrant latency.
+          runbook: "https://your-wiki/runbooks/retrieval-latency"
+
+      # ── 8. Document ingestion backlog (tasks stuck in-flight too long) ───────
+      - alert: CeleryIngestionBacklog
+        expr: celery_tasks_in_flight{task_name=~".*process.*"} > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 10 document processing tasks stuck in flight"
+          description: >
+            {{ $value }} ingestion tasks have been running for more than
+            10 minutes. Check for stuck workers or very large documents.
+          runbook: "https://your-wiki/runbooks/celery-backlog"

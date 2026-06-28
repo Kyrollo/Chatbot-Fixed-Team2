@@ -51,11 +51,7 @@ if _MULTIPROC_DIR:
 from prometheus_client import Gauge, Counter, Histogram, CollectorRegistry, multiprocess
 from prometheus_fastapi_instrumentator import Instrumentator
 
-# ── Custom metrics ──────────────────────────────────────────────────────────
-# Defining these is unchanged either way — prometheus_client itself
-# switches to writing per-process delta files internally once it sees
-# PROMETHEUS_MULTIPROC_DIR at import time above, so no per-metric code
-# here needs to know which mode it's in.
+# ── Original metrics (unchanged) ────────────────────────────────────────────
 
 eval_runs_total = Counter(
     "evaluation_runs_total",
@@ -100,6 +96,63 @@ moderation_queue_size = Gauge(
     "Current number of items with status=pending in moderation_queue",
     multiprocess_mode="mostrecent" if _MULTIPROC_DIR else "all",
 )
+
+# ── NEW metrics (added for alerting + Grafana dashboard) ────────────────────
+# Same multiprocess rules apply — Gauges need multiprocess_mode,
+# Counters and Histograms are handled automatically by prometheus_client.
+
+eval_requests_total = Counter(
+    "eval_requests_total",
+    "Total evaluation requests received, by judge and outcome",
+    ["judge", "status"],   # status: "success" | "failure"
+    # Counter in multiprocess mode: values are SUMMED across all
+    # processes — correct behaviour for a cumulative counter.
+)
+
+eval_judge_reachable = Gauge(
+    "eval_judge_reachable",
+    "1 if the judge LLM responded successfully on the last call, 0 if it failed",
+    ["judge"],
+    multiprocess_mode="mostrecent" if _MULTIPROC_DIR else "all",
+    # "mostrecent" — we want the latest reachability status, not a sum
+    # or max across processes.
+)
+
+eval_queue_depth = Gauge(
+    "eval_queue_depth",
+    "Number of evaluations currently waiting in the Celery queue",
+    multiprocess_mode="mostrecent" if _MULTIPROC_DIR else "all",
+)
+
+
+# ── HOW TO USE THE NEW METRICS in evaluate_batch.py / router.py ─────────────
+#
+# import time
+# from metrics import (
+#     eval_requests_total,
+#     eval_judge_reachable,
+#     eval_score_gauge,
+#     eval_latency,
+# )
+#
+# judge = "custom_judge"   # or "ragas"
+# start = time.perf_counter()
+# try:
+#     score = call_judge(...)
+#     eval_score_gauge.labels(judge=judge).set(score)
+#     eval_requests_total.labels(judge=judge, status="success").inc()
+#     eval_judge_reachable.labels(judge=judge).set(1)
+# except Exception:
+#     eval_requests_total.labels(judge=judge, status="failure").inc()
+#     eval_judge_reachable.labels(judge=judge).set(0)
+#     raise
+# finally:
+#     eval_latency.labels(judge=judge).observe(time.perf_counter() - start)
+#
+# For queue depth — call this wherever you poll the Celery queue length:
+#     from metrics import eval_queue_depth
+#     eval_queue_depth.set(celery_inspect().reserved().__len__())
+# ────────────────────────────────────────────────────────────────────────────
 
 
 def setup_metrics(app):
