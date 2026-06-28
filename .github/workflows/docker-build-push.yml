@@ -1,0 +1,126 @@
+name: Build and Push Docker Images
+
+# Triggers on every push to main — this repo has no other long-lived
+# branches, everything lands on main directly.
+on:
+  push:
+    branches:
+      - main
+
+env:
+  DOCKERHUB_NAMESPACE: rag-system
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set short SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # --- Base image (shared by monolith + worker) --------------------------
+      # Built and pushed first, then used as the FROM target for the two
+      # images below. The Docker Hub copy of rag-base exists mainly so the
+      # later steps in THIS workflow can pull it as a cache source on
+      # GitHub-hosted runners (which start with an empty local Docker cache
+      # every run) — it's not meant to be deployed on its own via Helm.
+      - name: Build and push rag-base
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/docker/Dockerfile.base
+          push: true
+          tags: |
+            ${{ env.DOCKERHUB_NAMESPACE }}/rag-base:latest
+            ${{ env.DOCKERHUB_NAMESPACE }}/rag-base:${{ steps.vars.outputs.sha_short }}
+          cache-from: type=registry,ref=${{ env.DOCKERHUB_NAMESPACE }}/rag-base:latest
+          cache-to: type=inline
+
+      # --- monolith-service ----------------------------------------------------
+      - name: Build and push rag-monolith
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/docker/Dockerfile.monolith
+          push: true
+          tags: |
+            ${{ env.DOCKERHUB_NAMESPACE }}/rag-monolith:latest
+            ${{ env.DOCKERHUB_NAMESPACE }}/rag-monolith:${{ steps.vars.outputs.sha_short }}
+          cache-from: type=registry,ref=${{ env.DOCKERHUB_NAMESPACE }}/rag-monolith:latest
+          cache-to: type=inline
+          # Dockerfile.monolith does `FROM rag-base:dev`. Buildx needs to
+          # know that's actually the image we just pushed above — this
+          # build-arg/contexts override resolves "rag-base:dev" to the
+          # real Docker Hub tag instead of trying to pull a nonexistent
+          # local-only image of that exact name.
+          build-contexts: |
+            rag-base:dev=docker-image://${{ env.DOCKERHUB_NAMESPACE }}/rag-base:${{ steps.vars.outputs.sha_short }}
+
+      # --- worker-service --------------------------------------------------------
+      - name: Build and push rag-worker
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/docker/Dockerfile.worker
+          push: true
+          tags: |
+            ${{ env.DOCKERHUB_NAMESPACE }}/rag-worker:latest
+            ${{ env.DOCKERHUB_NAMESPACE }}/rag-worker:${{ steps.vars.outputs.sha_short }}
+          cache-from: type=registry,ref=${{ env.DOCKERHUB_NAMESPACE }}/rag-worker:latest
+          cache-to: type=inline
+          build-contexts: |
+            rag-base:dev=docker-image://${{ env.DOCKERHUB_NAMESPACE }}/rag-base:${{ steps.vars.outputs.sha_short }}
+
+      # --- evaluation-service -------------------------------------------------------
+      # Standalone image, doesn't depend on rag-base, no build-contexts override needed.
+      - name: Build and push rag-evaluation
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/docker/Dockerfile.evaluation
+          push: true
+          tags: |
+            ${{ env.DOCKERHUB_NAMESPACE }}/rag-evaluation:latest
+            ${{ env.DOCKERHUB_NAMESPACE }}/rag-evaluation:${{ steps.vars.outputs.sha_short }}
+          cache-from: type=registry,ref=${{ env.DOCKERHUB_NAMESPACE }}/rag-evaluation:latest
+          cache-to: type=inline
+
+      # --- rag-ui ----------------------------------------------------------------
+      # Multi-stage (node build -> nginx serve), standalone, no shared base needed.
+      - name: Build and push rag-ui
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/docker/Dockerfile.rag-ui
+          push: true
+          tags: |
+            ${{ env.DOCKERHUB_NAMESPACE }}/rag-ui:latest
+            ${{ env.DOCKERHUB_NAMESPACE }}/rag-ui:${{ steps.vars.outputs.sha_short }}
+          cache-from: type=registry,ref=${{ env.DOCKERHUB_NAMESPACE }}/rag-ui:latest
+          cache-to: type=inline
+
+      - name: Summary
+        run: |
+          echo "### Images pushed to Docker Hub" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ${{ env.DOCKERHUB_NAMESPACE }}/rag-base:${{ steps.vars.outputs.sha_short }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ${{ env.DOCKERHUB_NAMESPACE }}/rag-monolith:${{ steps.vars.outputs.sha_short }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ${{ env.DOCKERHUB_NAMESPACE }}/rag-worker:${{ steps.vars.outputs.sha_short }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ${{ env.DOCKERHUB_NAMESPACE }}/rag-evaluation:${{ steps.vars.outputs.sha_short }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ${{ env.DOCKERHUB_NAMESPACE }}/rag-ui:${{ steps.vars.outputs.sha_short }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Update each subchart's values.yaml (or a values-*.yaml override) with:" >> "$GITHUB_STEP_SUMMARY"
+          echo '  image.tag: "${{ steps.vars.outputs.sha_short }}"' >> "$GITHUB_STEP_SUMMARY"
+          echo "to deploy this exact build via Helm." >> "$GITHUB_STEP_SUMMARY"

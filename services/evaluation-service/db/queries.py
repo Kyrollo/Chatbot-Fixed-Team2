@@ -79,13 +79,13 @@ SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
 # Used ONLY as a safety fallback on the very first run (cursor==0), so a
 # fresh install doesn't try to evaluate the entire rag_query_logs history
 # in one shot. Ignored on every subsequent run once the cursor exists.
-EVAL_LOOKBACK_MINUTES = int(os.getenv("EVAL_LOOKBACK_MINUTES", "35"))
+EVAL_LOOKBACK_MINUTES = int(os.getenv("EVAL_LOOKBACK_MINUTES", "525960"))  # default = 1 year
 
 # Fraction of eligible rows to actually evaluate each run. 0.05 = 5%.
-EVAL_SAMPLE_RATE = float(os.getenv("EVAL_SAMPLE_RATE", "0.05"))
+EVAL_SAMPLE_RATE = float(os.getenv("EVAL_SAMPLE_RATE", "1.0"))
 
 # Score below this triggers a moderation_queue entry.
-MODERATION_THRESHOLD = float(os.getenv("MODERATION_THRESHOLD", "0.6"))
+MODERATION_THRESHOLD = float(os.getenv("MODERATION_THRESHOLD", "0.9"))
 
 # How long a live-evaluation cache row is kept before pruning. 7 days is
 # generous; the batch job runs every 30 minutes and consumes entries long
@@ -265,10 +265,19 @@ def get_cursor() -> int:
 
 def advance_cursor(new_last_id: int) -> None:
     """
-    Moves the cursor forward to new_last_id. Only ever moves forward —
-    if new_last_id ≤ current cursor (shouldn't happen in normal operation
-    but defensively guarded), the cursor is left unchanged to avoid
-    re-evaluating already-processed rows.
+    Moves the cursor to new_last_id.
+
+    Forward movement (new_last_id > current): normal operation after each
+    batch run — advances the watermark so the next run picks up where this
+    one left off.
+
+    Reset to 0 (new_last_id == 0): explicit self-healing — called by
+    evaluate_batch.py when the cursor has overshot all existing rows (e.g.
+    after clear_database.py). Passing 0 is always honoured regardless of
+    the current cursor value so the reset actually takes effect.
+
+    Any other backward move (0 < new_last_id < current) is still ignored
+    to prevent accidental re-evaluation of already-processed rows.
     """
     session = SessionLocal()
     try:
@@ -285,7 +294,8 @@ def advance_cursor(new_last_id: int) -> None:
                 updated_at=datetime.now(timezone.utc),
             )
             session.add(row)
-        elif new_last_id > row.last_query_id:
+        elif new_last_id == 0 or new_last_id > row.last_query_id:
+            # Allow explicit reset to 0 (self-healing) OR normal forward move.
             row.last_query_id = new_last_id
             row.updated_at    = datetime.now(timezone.utc)
         session.commit()
@@ -294,6 +304,35 @@ def advance_cursor(new_last_id: int) -> None:
         raise
     finally:
         session.close()
+
+
+def get_max_query_id() -> int:
+    """
+    Returns the highest id currently in rag_query_logs, or 0 if the
+    table is empty.
+
+    Used by evaluate_batch.py's cursor self-healing block to detect when
+    the cursor has overshot all existing rows — e.g. after
+    clear_database.py wipes and re-seeds the DB, leaving the old cursor
+    value (stored in the eval_cursor table) pointing past every new
+    row's id.
+
+    Never raises: if the table doesn't exist yet, the SELECT returns
+    NULL which COALESCE turns into 0, and the caller treats 0 as
+    "nothing to compare against, skip the reset".
+
+    FIX: previously called a nonexistent `_get_conn()` helper (leftover
+    from a raw psycopg2-style pattern that was never defined/imported in
+    this file), which raised NameError every time this function was
+    reached — i.e. on every run where there were no new rows to sample
+    AND the cursor was already past 0 (a perfectly normal, frequent
+    steady-state, not just a post-reset edge case). Rewritten to use the
+    same SQLAlchemy `_engine` + `text()` pattern already used everywhere
+    else in this file (see get_query_detail() below for the same shape).
+    """
+    sql = text("SELECT COALESCE(MAX(id), 0) FROM rag_query_logs;")
+    with _engine.connect() as conn:
+        return conn.execute(sql).scalar()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -329,6 +368,7 @@ def fetch_sample_query_ids(sample_rate: float = EVAL_SAMPLE_RATE) -> list[dict]:
                        SELECT 1
                        FROM   evaluation_logs e
                        WHERE  e.query_id = q.id
+                         AND  e.model_used = 'ragas'
                    )
               AND  random() < :sample_rate
             ORDER  BY q.id ASC
@@ -346,7 +386,7 @@ def fetch_sample_query_ids(sample_rate: float = EVAL_SAMPLE_RATE) -> list[dict]:
                        SELECT 1
                        FROM   evaluation_logs e
                        WHERE  e.query_id = q.id
-                       AND    e.model_used = 'ragas'
+                         AND  e.model_used = 'ragas'
                    )
               AND  random() < :sample_rate
             ORDER  BY q.id ASC

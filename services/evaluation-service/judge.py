@@ -100,14 +100,35 @@ def evaluate_answer(query: str, answer: str, context: str | None = None) -> dict
 
     Returns:
         {
-            "faithfulness":  0.0-1.0,
+            "faithfulness":  0.0-1.0, or None if no context was available
+                              (see note below — this mirrors RAGAS's
+                              behaviour instead of contradicting it),
             "relevance":     0.0-1.0,
             "completeness":  0.0-1.0,
             "raw_response":  "<full LLM JSON string>",
         }
 
     Raises RuntimeError if the LLM call fails and ALLOW_MOCK_JUDGE is False.
+
+    WHY faithfulness IS None WHEN context IS None
+    ------------------------------------------------
+    faithfulness measures whether the answer is supported BY THE CONTEXT.
+    With no context, that question has no defined answer — there's
+    nothing to check the answer against. The previous version of this
+    function asked the LLM to score faithfulness against the literal
+    string "No context provided.", which produced a real-looking number
+    (0%, 67%, 100%...) for a metric that was actually meaningless. That
+    silently disagreed with tasks/ragas_judge.py, which already skips
+    faithfulness entirely (-> None) in the same situation — so the same
+    row would show a RAGAS "—" next to a fabricated custom_judge
+    percentage on the Quality Dashboard, which looks like a bug rather
+    than "this metric can't be computed for this row". Skipping the
+    faithfulness dimension here (while still scoring relevance and
+    completeness normally, since those don't depend on context) keeps
+    both judges in agreement: no context -> no faithfulness score, full
+    stop, regardless of which judge ran.
     """
+    has_context = bool(context)
     route_label, base_url, model, headers = _route()
     payload = _build_payload(query, answer, context)
 
@@ -139,8 +160,13 @@ def evaluate_answer(query: str, answer: str, context: str | None = None) -> dict
             logger.error("Judge LLM call failed (ALLOW_MOCK_JUDGE=False — raising): %s", exc)
             raise RuntimeError(f"Judge LLM call failed: {exc}") from exc
 
+    faithfulness = (
+        max(0.0, min(1.0, float(parsed.get("faithfulness", 0.0))))
+        if has_context else None
+    )
+
     return {
-        "faithfulness":  max(0.0, min(1.0, float(parsed.get("faithfulness", 0.0)))),
+        "faithfulness":  faithfulness,
         "relevance":     max(0.0, min(1.0, float(parsed.get("relevance", 0.0)))),
         "completeness":  max(0.0, min(1.0, float(parsed.get("completeness", 0.0)))),
         "raw_response":  raw,
@@ -157,8 +183,9 @@ class JudgeService:
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0))
 
     async def evaluate(self, request: EvaluationRequest) -> EvaluationResponse:
+        has_context = bool(request.context_chunks)
+        context = "\n\n".join(request.context_chunks[:5]) if has_context else "No context provided."
         route_used, base_url, model, headers = _route()
-        context = "\n\n".join(request.context_chunks[:5]) or "No context provided."
         payload = _build_payload(request.query, request.answer, context)
         payload["model"] = model
 
@@ -189,8 +216,16 @@ class JudgeService:
                 )
                 raise RuntimeError(f"Judge LLM unavailable: {exc}") from exc
 
+        # faithfulness is only meaningful when real context was supplied.
+        # Without it, the LLM was asked to grade the answer against the
+        # literal placeholder string "No context provided." — that
+        # produces a real-looking number that means nothing, and it's
+        # the live-path source of the "real percentage from custom_judge
+        # next to a '—' from RAGAS on the same row" inconsistency on the
+        # Quality Dashboard. Skip it here exactly like evaluate_answer()
+        # (the batch-path sibling of this method) already does.
         faithfulness = None
-        if "faithfulness" in parsed:
+        if has_context and "faithfulness" in parsed:
             try:
                 faithfulness = max(0.0, min(1.0, float(parsed["faithfulness"])))
             except (ValueError, TypeError):

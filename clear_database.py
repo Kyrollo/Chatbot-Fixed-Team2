@@ -104,7 +104,7 @@ if __name__ == "__main__":
     if age_url:
         db_urls.append(age_url)
         
-    # 3. Standard fallback ports (5432 and 5434) to guarantee cleanup on both
+    # 3. Standard fallback ports (5432 and 5433) to guarantee cleanup on both
     user = os.getenv("POSTGRES_USER", "postgres")
     from urllib.parse import quote
     password = quote(os.getenv("POSTGRES_PASSWORD", "1234"), safe="")
@@ -112,7 +112,7 @@ if __name__ == "__main__":
     host = os.getenv("POSTGRES_HOST", "localhost")
     
     db_urls.append(f"postgresql://{user}:{password}@{host}:5432/{db}")
-    db_urls.append(f"postgresql://{user}:{password}@{host}:5434/{db}")
+    db_urls.append(f"postgresql://{user}:{password}@{host}:5433/{db}")
     
     # Deduplicate candidate URLs based on normalized connection strings
     seen_normalized = set()

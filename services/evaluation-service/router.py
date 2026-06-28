@@ -109,7 +109,15 @@ async def evaluate(payload: EvaluationRequest) -> EvaluationResponse:
         )
 
         if payload.query_id:
-            # Compute overall score as the average of the available scores
+            # Compute overall score as the average of the available scores,
+            # skipping None. Mirrors evaluate_batch.py's _overall_score()
+            # (same skip-None-and-average logic, just inlined here instead
+            # of a shared helper). Now that JudgeService.evaluate() returns
+            # faithfulness=None when context_chunks is empty (instead of a
+            # fabricated score against a placeholder string), this average
+            # is automatically computed over only the metrics that are
+            # actually meaningful for this row — exactly like the batch
+            # path already did.
             valid_scores = [v for v in [result.faithfulness, result.score, result.completeness] if v is not None]
             overall = sum(valid_scores) / len(valid_scores) if valid_scores else result.score
 

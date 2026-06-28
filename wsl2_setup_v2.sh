@@ -84,8 +84,8 @@ PG_CONF="/etc/postgresql/17/main/postgresql.conf"
 PG_HBA="/etc/postgresql/17/main/pg_hba.conf"
 
 # Port (avoid Windows conflict)
-sudo sed -i "s/^#port = .*/port = 5434/" "$PG_CONF"
-grep -q "^port = 5434" "$PG_CONF" || echo "port = 5434" | sudo tee -a "$PG_CONF"
+sudo sed -i "s/^#port = .*/port = 5433/" "$PG_CONF"
+grep -q "^port = 5433" "$PG_CONF" || echo "port = 5433" | sudo tee -a "$PG_CONF"
 
 # FIX: listen on all interfaces, not just localhost-inside-WSL2.
 # Your Python services run on WINDOWS, outside WSL2 — with
@@ -146,11 +146,11 @@ sudo -u postgres psql -c "SELECT * FROM ag_catalog.create_graph('rag_graph');"
 # ─────────────────────────────
 echo "════════════════════════════════════════════"
 echo "✅ SETUP COMPLETE!"
-echo "👉 PostgreSQL: localhost:5434"
+echo "👉 PostgreSQL: localhost:5433"
 echo "👉 AGE: Enabled"
 echo "👉 Graph: rag_graph created"
 echo "════════════════════════════════════════════"
 echo ""
 echo "Next: verify from WINDOWS PowerShell (not WSL2) with:"
-echo '  psql -h localhost -p 5434 -U postgres -c "SELECT version();"'
+echo '  psql -h localhost -p 5433 -U postgres -c "SELECT version();"'
 echo "This confirms Windows can actually reach the WSL2 database."

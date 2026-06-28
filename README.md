@@ -25,6 +25,7 @@ A complete backend + frontend stack for domain management, document ingestion, h
 15. [Directory Layout](#15-directory-layout)
 16. [Quick Reference Card](#16-quick-reference-card)
 17. [Sprint 3 — Hybrid Graph RAG (Apache AGE)](#17-sprint-3--hybrid-graph-rag-apache-age)
+18. [Monitoring — Prometheus + Grafana](#18-monitoring--prometheus--grafana)
 
 ---
 
@@ -1746,3 +1747,191 @@ GROUP BY model;
 | `listen_addresses` not set | Inside WSL2: `sudo nano /etc/postgresql/17/main/postgresql.conf` → set `listen_addresses = '*'`, then `sudo service postgresql restart` |
 
 ---
+
+## 18. Monitoring — Prometheus + Grafana
+
+Real-time observability for every service: request latency, error rates, evaluation quality scores, retrieval pipeline stage breakdown, and Celery worker health — all visible in pre-built Grafana dashboards with alerting to Slack.
+
+### 18.1 What Gets Monitored
+
+| Service | What is tracked |
+|---|---|
+| domain-service | Request rate, error rate, p50/p95/p99 latency |
+| ingestion-service | Request rate, error rate, latency |
+| retrieval-service | Per-stage latency (embed/dense/sparse/RRF/rerank), cache hit rate, stage errors, RRF top score |
+| generation-service | Request rate, error rate, latency |
+| evaluation-service | Eval score per judge type (custom_judge / ragas), eval latency, judge reachability, failure rate |
+| worker-service (Celery) | Task throughput, task duration p50/p95, in-flight tasks, worker UP/DOWN |
+
+### 18.2 Architecture
+
+```
+FastAPI services (ports 8001–8005)        Celery worker-service
+  each exposes GET /metrics                 exposes /metrics on :9090
+         │                                        │
+         └──────────────┬─────────────────────────┘
+                        ▼
+              Prometheus (Docker :9091)
+              scrapes every 15 seconds
+                        │
+          ┌─────────────┴──────────────┐
+          ▼                            ▼
+  Grafana (Docker :3000)      Alertmanager (Docker :9093)
+  4 dashboards pre-loaded      fires Slack alerts on threshold
+```
+
+### 18.3 Files Added
+
+```
+Chatbot-Fixed-Team2/
+├── monitoring/
+│   ├── docker-compose.monitoring.yml      ← starts Prometheus + Grafana + Alertmanager
+│   ├── prometheus/
+│   │   ├── prometheus.yaml                ← scrape config (all 6 targets)
+│   │   └── alerts.yaml                    ← 8 alert rules
+│   ├── grafana/
+│   │   ├── datasources/
+│   │   │   └── prometheus-datasource.yaml
+│   │   ├── provisioning/
+│   │   │   └── dashboards.yaml
+│   │   └── dashboards/
+│   │       ├── service-health.json        ← Dashboard 1: request rate, errors, latency
+│   │       ├── evaluation-quality.json    ← Dashboard 2: eval scores, judge reachability
+│   │       ├── infra-overview.json        ← Dashboard 3: Celery tasks, worker health
+│   │       └── retrieval-pipeline.json    ← Dashboard 4: per-stage retrieval breakdown
+│   └── alertmanager/
+│       └── alertmanager.yaml
+└── services/
+    └── shared/
+        └── service_metrics.py             ← shared /metrics endpoint for 4 FastAPI services
+```
+
+> `evaluation-service` has its own `metrics.py` (multiprocess-safe, uses `prometheus_fastapi_instrumentator`).
+> `retrieval-service` additionally has `retrieval_metrics.py` for pipeline-stage metrics.
+
+### 18.4 Prerequisites
+
+- **Docker Desktop** running
+- `pip install prometheus-client` in your venv (add to `requirements.txt`)
+- `prometheus-fastapi-instrumentator` already installed (used by evaluation-service)
+
+### 18.5 One-Time Code Setup
+
+#### Step 1 — Add to each service's `main.py` (domain, ingestion, retrieval, generation)
+
+```python
+from service_metrics import metrics_router, instrument_app
+
+app = FastAPI(title="generation-service")
+instrument_app(app, service_name="generation-service")   # middleware
+app.include_router(metrics_router)                        # GET /metrics
+```
+
+Change `service_name` per service. The shared `service_metrics.py` lives in `services/shared/` — importable because `run_services.py` adds `services/shared/` to `sys.path`.
+
+#### Step 2 — evaluation-service `main.py`
+
+```python
+from metrics import setup_metrics   # uses evaluation-service's own metrics.py
+
+app = FastAPI(title="evaluation-service")
+setup_metrics(app)
+```
+
+#### Step 3 — Add to `.env`
+
+```ini
+PYTHONPATH=services/shared
+PROMETHEUS_MULTIPROC_DIR=./tmp/prometheus_multiproc
+```
+
+`PROMETHEUS_MULTIPROC_DIR` is required so evaluation-service's Celery worker and FastAPI process share metric state correctly.
+
+### 18.6 Starting the Monitoring Stack
+
+```powershell
+# Start your services as normal first
+python run_services.py --worker --evaluation
+
+# Then in a NEW terminal — start monitoring
+cd monitoring
+docker compose -f docker-compose.monitoring.yml up -d
+
+# Verify all 3 containers are running
+docker compose -f docker-compose.monitoring.yml ps
+```
+
+### 18.7 Verifying Services Are Scraped
+
+```powershell
+# Each service should return Prometheus text format
+curl http://localhost:8001/metrics -UseBasicParsing
+curl http://localhost:8002/metrics -UseBasicParsing
+curl http://localhost:8003/metrics -UseBasicParsing
+curl http://localhost:8004/metrics -UseBasicParsing
+curl http://localhost:8005/metrics -UseBasicParsing
+curl http://localhost:9090/metrics -UseBasicParsing   # Celery worker
+```
+
+Then open **http://localhost:9091/targets** — all 6 targets should show state **UP**.
+
+### 18.8 Opening the Dashboards
+
+Navigate to **http://localhost:3000** — login with `admin` / `admin`.
+
+Go to **Dashboards → RAG Platform**:
+
+| Dashboard | What you see |
+|---|---|
+| **Service Health** | Request rate per service, 5xx error rate, p50/p95/p99 latency, requests in-flight |
+| **Evaluation Quality** | Eval score by judge type (color-coded 0–1), eval latency, judge UP/DOWN, failure rate % |
+| **Infra Overview** | Celery worker status, task throughput success/failure, task duration p50/p95, 24h totals |
+| **Retrieval Pipeline** | Per-stage latency (embed/dense/sparse/RRF/rerank), Qdrant vs BM25 vs reranker breakdown, cache hit rate, stage errors |
+
+### 18.9 Alert Rules
+
+8 alerts are pre-configured in `monitoring/prometheus/alerts.yaml`:
+
+| Alert | Condition | Severity |
+|---|---|---|
+| `JudgeLLMUnreachable` | `eval_judge_reachable == 0` for 2 min | critical |
+| `EvalFailureRateHigh` | >10% eval failures over 15 min | warning |
+| `GenerationLatencyHigh` | generation p95 > 5 s for 5 min | warning |
+| `ServiceHighErrorRate` | >5% 5xx rate for 5 min on any service | critical |
+| `CeleryWorkerDown` | `celery_worker_up == 0` for 2 min | critical |
+| `CeleryIngestionBacklog` | >10 tasks in-flight for 10 min | warning |
+| `RetrievalStageErrors` | any retrieval stage > 0.1 errors/s for 5 min | warning |
+| `RetrievalLatencyHigh` | retrieval pipeline p95 > 3 s for 5 min | warning |
+
+### 18.10 Slack Alerts (Optional)
+
+1. Create a Slack webhook at https://api.slack.com/messaging/webhooks
+2. Edit `monitoring/alertmanager/alertmanager.yaml`:
+   ```yaml
+   global:
+     slack_api_url: "https://hooks.slack.com/services/YOUR/ACTUAL/WEBHOOK"
+   ```
+3. Reload: `curl -X POST http://localhost:9093/-/reload`
+
+Critical alerts go to `#rag-alerts-critical`, warnings to `#rag-alerts`.
+
+### 18.11 Stopping the Monitoring Stack
+
+```powershell
+cd monitoring
+docker compose -f docker-compose.monitoring.yml down
+
+# To also wipe all stored metrics data:
+docker compose -f docker-compose.monitoring.yml down -v
+```
+
+### 18.12 Monitoring Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Target shows `connection refused` in Prometheus | Service not running or `/metrics` not wired in `main.py`. Run `curl localhost:800X/metrics`. |
+| Grafana shows "No data" | Datasource URL must be `http://prometheus:9090` (container name). Already set in `prometheus-datasource.yaml`. |
+| Celery metrics target DOWN | `start_metrics_server(9090)` not called at worker startup. Check worker logs for `[celery-metrics] Prometheus metrics server started`. |
+| `ValueError: Duplicated timeseries` on service start | `service_metrics.py` registered twice. The `_get_or_create()` guard in `service_metrics.py` prevents this — ensure you're importing from `service_metrics`, not `metrics`. |
+| evaluation-service metrics always 0 in Grafana | `PROMETHEUS_MULTIPROC_DIR` not set in `.env` or not seen by all 3 evaluation processes (FastAPI + Celery worker + Celery beat). Set it in `.env`, not in the shell. |
+| Prometheus config change not picked up | Hot-reload: `curl -X POST http://localhost:9091/-/reload` |

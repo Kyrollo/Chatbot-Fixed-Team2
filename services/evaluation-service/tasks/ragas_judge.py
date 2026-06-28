@@ -252,7 +252,14 @@ if os.name == "nt":
         pass
 
 import logging
+from pathlib import Path
 from typing import Optional
+from dotenv import load_dotenv
+
+# Load .env from the project root (two levels up from this file's directory)
+# so GROQ_API_KEY and other vars are available regardless of which working
+# directory the Celery worker was started from.
+load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=False)
 
 logger = logging.getLogger(__name__)
 

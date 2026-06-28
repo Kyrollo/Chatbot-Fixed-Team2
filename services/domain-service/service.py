@@ -284,7 +284,7 @@ async def get_config(
     db: AsyncSession, domain_id: uuid.UUID, user: dict
 ) -> DomainConfig:
     await _get_domain_or_404(db, domain_id)
-    await _ensure_min_role(db, user, domain_id, RoleEnum.contributor)
+    await _ensure_min_role(db, user, domain_id, RoleEnum.reader)
     return await _get_config_or_404(db, domain_id)
 
 
