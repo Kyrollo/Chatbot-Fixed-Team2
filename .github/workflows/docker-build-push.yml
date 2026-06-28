@@ -8,7 +8,7 @@ on:
       - main
 
 env:
-  DOCKERHUB_NAMESPACE: rag-system
+  DOCKERHUB_NAMESPACE: hudamawood
 
 jobs:
   build-and-push:
