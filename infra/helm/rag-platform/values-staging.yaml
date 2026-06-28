@@ -1,0 +1,81 @@
+# =============================================================================
+# infra/helm/rag-platform/values-staging.yaml
+#
+# Staging environment overrides — 2 replicas per service, medium resource
+# requests. HPA enabled so it can be exercised/tested before prod.
+#
+# IMAGE TAG: staging should pin to a specific commit SHA, not `latest`,
+# so you always know exactly which build is running and can roll back
+# precisely. Find the SHA from the GitHub Actions run summary (each run
+# of .github/workflows/docker-build-push.yml prints the exact tags it
+# pushed), then set it below before deploying, e.g.:
+#   image:
+#     tag: "a1b2c3d"
+# Left as `latest` here as a placeholder — replace before any real
+# staging deploy.
+#
+# Usage:
+#   helm upgrade --install rag-platform ./infra/helm/rag-platform -f values-staging.yaml
+# =============================================================================
+
+monolith-service:
+  replicaCount: 2
+  image:
+    tag: latest   # <-- replace with a commit SHA before deploying to staging
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+
+evaluation-service:
+  replicaCount: 2
+  image:
+    tag: latest   # <-- replace with a commit SHA before deploying to staging
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+
+worker-service:
+  replicaCount: 2
+  image:
+    tag: latest   # <-- replace with a commit SHA before deploying to staging
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  # No HPA — worker-service has no Service/HPA template per the spec.
+  # Scaling the worker is done by bumping replicaCount manually per environment.
+
+rag-ui:
+  replicaCount: 2
+  image:
+    tag: latest   # <-- replace with a commit SHA before deploying to staging
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 384Mi
+  hpa:
+    enabled: false

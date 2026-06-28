@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-worker-service
+  labels:
+    app: worker-service
+    release: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: worker-service
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: worker-service
+        release: {{ .Release.Name }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker-service
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy | default .Values.global.imagePullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-worker-service-config
+            - secretRef:
+                name: {{ .Values.existingSecretName }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          # No livenessProbe/readinessProbe: worker-service runs no HTTP
+          # server (Celery, --pool=solo), so there is no port to probe.
+          # Health is observed via Celery's own task heartbeat and the
+          # celery_metrics.py Prometheus counters exposed through the
+          # monolith's merged /metrics endpoint.

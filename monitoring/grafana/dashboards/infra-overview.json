@@ -1,24 +1,51 @@
 {
   "title": "Infra Overview",
-  "uid": "rag-infra",
-  "tags": ["rag", "infra", "celery"],
+  "uid": "rag-infra-overview",
+  "tags": [
+    "rag",
+    "infra",
+    "celery"
+  ],
   "timezone": "browser",
   "refresh": "30s",
   "schemaVersion": 38,
-  "time": { "from": "now-3h", "to": "now" },
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
   "panels": [
     {
       "id": 1,
       "title": "Celery Worker Status",
       "type": "stat",
-      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
       "targets": [
-        { "expr": "celery_worker_up", "legendFormat": "Worker" }
+        {
+          "expr": "celery_worker_up",
+          "legendFormat": "Worker"
+        }
       ],
       "fieldConfig": {
         "defaults": {
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green"
+                }
+              }
+            }
           ]
         }
       }
@@ -27,34 +54,63 @@
       "id": 2,
       "title": "Tasks In-Flight (currently running)",
       "type": "stat",
-      "gridPos": { "x": 4, "y": 0, "w": 8, "h": 4 },
+      "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 8,
+        "h": 4
+      },
       "targets": [
-        { "expr": "sum(celery_tasks_in_flight) by (task_name)", "legendFormat": "{{task_name}}" }
+        {
+          "expr": "sum(celery_tasks_in_flight) by (task_name)",
+          "legendFormat": "{{task_name}}"
+        }
       ],
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal" }
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "horizontal"
+      }
     },
     {
       "id": 3,
-      "title": "Task Throughput (tasks/min) — by task name",
+      "title": "Task Throughput (tasks/min) \u2014 by task name",
       "type": "timeseries",
-      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
       "targets": [
         {
           "expr": "sum(rate(celery_tasks_total{status=\"success\"}[1m])) by (task_name) * 60",
-          "legendFormat": "success — {{task_name}}"
+          "legendFormat": "success \u2014 {{task_name}}"
         },
         {
           "expr": "sum(rate(celery_tasks_total{status=\"failure\"}[1m])) by (task_name) * 60",
-          "legendFormat": "failure — {{task_name}}"
+          "legendFormat": "failure \u2014 {{task_name}}"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "short" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      }
     },
     {
       "id": 4,
       "title": "Task Duration p50 / p95 (seconds)",
       "type": "timeseries",
-      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
       "targets": [
         {
           "expr": "histogram_quantile(0.50, sum(rate(celery_task_duration_seconds_bucket[5m])) by (task_name, le))",
@@ -65,13 +121,22 @@
           "legendFormat": "p95 {{task_name}}"
         }
       ],
-      "fieldConfig": { "defaults": { "unit": "s" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
     },
     {
       "id": 5,
-      "title": "Total Tasks (last 24 h) — success vs failure",
+      "title": "Total Tasks (last 24 h) \u2014 success vs failure",
       "type": "piechart",
-      "gridPos": { "x": 0, "y": 12, "w": 8, "h": 7 },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 8,
+        "h": 7
+      },
       "targets": [
         {
           "expr": "sum(increase(celery_tasks_total[24h])) by (status)",
@@ -81,16 +146,28 @@
     },
     {
       "id": 6,
-      "title": "HTTP Requests Total — all services (last 24 h)",
+      "title": "HTTP Requests Total \u2014 all services (last 24 h)",
       "type": "stat",
-      "gridPos": { "x": 8, "y": 12, "w": 16, "h": 7 },
+      "gridPos": {
+        "x": 8,
+        "y": 12,
+        "w": 16,
+        "h": 7
+      },
       "targets": [
         {
           "expr": "sum(increase(http_requests_total[24h])) by (service)",
           "legendFormat": "{{service}}"
         }
       ],
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal" }
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "horizontal"
+      }
     }
   ]
 }

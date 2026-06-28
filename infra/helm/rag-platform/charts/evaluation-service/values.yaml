@@ -1,0 +1,86 @@
+# =============================================================================
+# infra/helm/rag-platform/charts/evaluation-service/values.yaml
+#
+# evaluation-service runs as three roles from the SAME image
+# (rag-evaluation:dev), distinguished only by container `command`:
+#   - api    : uvicorn main:app        (gets a Service + HPA)
+#   - worker : celery worker -Q evaluation  (Deployment only, like worker-service)
+#   - beat   : celery beat             (Deployment only, exactly 1 replica —
+#              running >1 beat instance double-fires the scheduled task)
+# =============================================================================
+
+replicaCount: 1   # applies to the `api` role; worker/beat have fixed counts below
+
+image:
+  # Pushed by .github/workflows/docker-build-push.yml on every push to main.
+  repository: rag-system/rag-evaluation
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8005
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 1Gi
+
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
+config:
+  PORT: "8005"
+  ALLOW_MOCK_JUDGE: "false"
+  EVALUATE_SYNC: "true"
+  EVALUATE_ON_GENERATION: "true"
+
+existingSecretName: "rag-platform-secrets"
+
+probes:
+  liveness:
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 15
+  readiness:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+
+# --- Role-specific commands ----------------------------------------------------
+commands:
+  api:
+    - "uvicorn"
+    - "main:app"
+    - "--host"
+    - "0.0.0.0"
+    - "--port"
+    - "8005"
+  worker:
+    - "celery"
+    - "-A"
+    - "celery_app"
+    - "worker"
+    - "--loglevel=info"
+    - "--pool=solo"
+    - "-Q"
+    - "evaluation"
+  beat:
+    - "celery"
+    - "-A"
+    - "celery_app"
+    - "beat"
+    - "--loglevel=info"
+
+# worker and beat replica counts are fixed (not scaled by environment
+# values files) — beat MUST stay at 1, worker is deliberately not
+# environment-scaled here to avoid duplicate evaluation runs; bump manually
+# if evaluation throughput genuinely becomes a bottleneck.
+workerReplicaCount: 1
+beatReplicaCount: 1

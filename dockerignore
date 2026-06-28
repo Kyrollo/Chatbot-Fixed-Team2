@@ -1,0 +1,63 @@
+# =============================================================================
+# .dockerignore (place at REPO ROOT — same level as requirements.txt)
+#
+# Build context for every Dockerfile in this project is the repo root
+# (required by services/monolith/main.py's ROOT = parents[2] relative path
+# math). Without this file, `docker build .` would send gigabytes of junk
+# (uploaded user files, model caches, venvs, node_modules) into the build
+# context on every single build — slow and wasteful even with layer caching,
+# since the context itself still gets re-hashed/re-sent each time.
+# =============================================================================
+
+# --- Version control ---------------------------------------------------------
+.git
+.gitignore
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# --- Local data / uploads (large, never needed inside an image) -------------
+data/uploads/
+data/qdrant/
+data/dev/
+logs.txt
+query
+
+# --- Celery beat schedule files (runtime state, not build input) -----------
+celerybeat-schedule*
+
+# --- Node / frontend (rag-ui builds separately, multi-stage handles its own
+#     node_modules inside that Dockerfile — exclude here so backend image
+#     builds don't pay to copy it in) ------------------------------------------
+**/node_modules/
+**/dist/
+**/.vite/
+
+# --- Editor / OS ---------------------------------------------------------------
+.vscode/
+.DS_Store
+Thumbs.db
+
+# --- Secrets — never bake these into an image; injected via K8s Secrets ----
+.env
+.env.*
+!.env.example
+**/jwt_private.pem
+**/jwt_public.pem
+
+# --- Helm / infra (not needed inside app images) -----------------------------
+infra/
+
+# --- Misc project artifacts ---------------------------------------------------
+*.md
+!README.md
+run_guide.md
+wsl2_setup_v2.sh
+clear_database.py
+delete_chunks.py
+run_migration.py

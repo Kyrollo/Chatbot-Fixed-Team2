@@ -1,0 +1,10 @@
+apiVersion: v2
+name: rag-ui
+description: >-
+  Vite + React frontend, served by nginx. The only Service in this
+  platform intended for external exposure — proxies /api/* internally to
+  monolith-service. TLS/Ingress is handled separately (see umbrella
+  chart README) and targets this Service.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

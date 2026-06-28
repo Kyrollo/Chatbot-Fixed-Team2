@@ -1,0 +1,58 @@
+# =============================================================================
+# infra/helm/rag-platform/values-dev.yaml
+#
+# Dev environment overrides — use on a local cluster (minikube/kind) while
+# building and testing the chart itself. Smallest footprint, single replica
+# per service (HPA effectively has nothing to scale from at 1 replica, but
+# it's still defined so the manifest shape matches staging/prod).
+#
+# Usage:
+#   helm install rag-platform ./infra/helm/rag-platform -f values-dev.yaml
+# =============================================================================
+
+monolith-service:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  hpa:
+    enabled: false   # not meaningful at 1 replica in dev; templates still render if you flip this on
+
+evaluation-service:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  hpa:
+    enabled: false
+
+worker-service:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  # worker-service has no Service/HPA per the spec — Deployment only.
+
+rag-ui:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  hpa:
+    enabled: false

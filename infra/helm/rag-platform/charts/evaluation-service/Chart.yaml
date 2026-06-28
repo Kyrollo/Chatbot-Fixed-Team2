@@ -1,0 +1,9 @@
+apiVersion: v2
+name: evaluation-service
+description: >-
+  RAGAS LLM-as-judge evaluation service. Deploys three roles from one image:
+  api (FastAPI, scrapeable /metrics), worker (Celery, evaluate_recent_answers
+  task), and beat (Celery scheduler, fires the task every 30 min).
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

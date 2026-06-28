@@ -75,6 +75,7 @@ from db.queries import (
     prune_old_cache_entries,
     MODERATION_THRESHOLD,
     log_audit_event,
+    get_max_query_id,
 )
 from tasks.moderation import should_flag_for_moderation
 
@@ -172,6 +173,26 @@ def evaluate_recent_answers(self):
 
     cursor_before = get_cursor()
     rows          = fetch_sample_query_ids()
+
+    # ── Cursor self-healing ──────────────────────────────────────────────────
+    # If the cursor has overshot all existing rows (e.g. after
+    # clear_database.py, or after the cursor was advanced past the latest
+    # id by a previous bug), reset it to 0 so the next sample picks up
+    # from the beginning again.
+    # Safe to do: fetch_sample_query_ids uses NOT EXISTS on evaluation_logs,
+    # so rows already evaluated are skipped even after a cursor reset —
+    # no row is ever double-scored.
+    if len(rows) == 0 and cursor_before > 0:
+        max_existing = get_max_query_id()   # 0 if table is empty
+        if max_existing < cursor_before:
+            logger.warning(
+                "Cursor (%d) is ahead of the highest query_log id (%d) — "
+                "resetting cursor to 0 so unevaluated rows are picked up.",
+                cursor_before, max_existing,
+            )
+            advance_cursor(0)
+            cursor_before = 0
+            rows = fetch_sample_query_ids()
 
     logger.info(
         "evaluate_recent_answers start — %d rows sampled (cursor was id > %d)",

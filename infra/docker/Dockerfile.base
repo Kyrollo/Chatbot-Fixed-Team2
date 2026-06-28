@@ -1,0 +1,70 @@
+# =============================================================================
+# infra/docker/Dockerfile.base
+#
+# Shared base image for monolith-service and worker-service.
+#
+# WHY THIS EXISTS:
+#   Both services install from the exact same root `requirements.txt`
+#   (confirmed: domain-service, ingestion-service, retrieval-service,
+#   generation-service, and worker-service requirements.txt files all
+#   just do `-r ../../requirements.txt`). That file is heavy — PyTorch,
+#   PaddleOCR, Surya OCR, GLiNER, transformers, Camelot, etc.
+#
+#   Building this once as a shared base means:
+#     - The expensive `pip install` layer is built ONE time
+#     - Docker's layer cache reuses it for both Dockerfile.monolith and
+#       Dockerfile.worker, as long as requirements.txt hasn't changed
+#     - You don't pay the multi-minute install cost twice on every build
+#
+# BUILD CONTEXT: must be the REPO ROOT (not infra/docker/).
+#   This is required because services/monolith/main.py computes:
+#     ROOT = Path(__file__).resolve().parents[2]
+#   i.e. it expects services/, requirements.txt, etc. at fixed relative
+#   depths from itself. If the image doesn't mirror the repo's folder
+#   layout exactly, the dynamic service loader in main.py will fail at
+#   container startup with a FileNotFoundError when it tries to read
+#   services/<name>/main.py from disk.
+#
+# Build manually (for testing only — normally just used as a FROM base):
+#   docker build -f infra/docker/Dockerfile.base -t rag-base:dev .
+# =============================================================================
+
+FROM python:3.11-slim AS base
+
+# --- OS-level dependencies -----------------------------------------------
+# These are required by packages in requirements.txt that need to compile
+# or link against system libraries:
+#   - libgl1, libglib2.0-0      : required by opencv-python-headless (cv2)
+#   - libgomp1                  : required by onnxruntime / paddlepaddle
+#   - poppler-utils, ghostscript: required by camelot-py for PDF table parsing
+#   - curl                      : used by Kubernetes readiness/liveness probes later
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    poppler-utils \
+    ghostscript \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Non-root user ---------------------------------------------------------
+# Created here (in the base) so both monolith and worker images inherit it.
+RUN groupadd --gid 1000 appuser && \
+    useradd --uid 1000 --gid appuser --shell /bin/bash --create-home appuser
+
+WORKDIR /app
+
+# --- Dependency install (cached layer) --------------------------------------
+# Only the requirements.txt is copied first, so this layer is only
+# invalidated when dependencies actually change — not on every code edit.
+COPY requirements.txt /app/requirements.txt
+
+# --extra-index-url for the CPU-only PyTorch wheels is already declared
+# INSIDE requirements.txt itself (per the file's own header), so a plain
+# pip install picks it up — no extra --extra-index-url flag needed here.
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r /app/requirements.txt
+
+# NOTE: actual application code is NOT copied here. Dockerfile.monolith
+# and Dockerfile.worker each FROM this image and COPY their own code in
+# a later layer, so code changes never invalidate this expensive layer.

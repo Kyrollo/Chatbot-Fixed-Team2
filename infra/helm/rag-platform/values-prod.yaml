@@ -1,0 +1,79 @@
+# =============================================================================
+# infra/helm/rag-platform/values-prod.yaml
+#
+# Production environment overrides — 3 replicas per service, full resource
+# requests, HPA enabled targeting 70% CPU utilization (per spec).
+#
+# IMAGE TAG: prod must pin to a specific commit SHA, never `latest`.
+# Get the SHA from the GitHub Actions run summary, then replace below
+# before deploying, e.g.:
+#   image:
+#     tag: "a1b2c3d"
+#
+# Usage:
+#   helm upgrade --install rag-platform ./infra/helm/rag-platform -f values-prod.yaml
+# =============================================================================
+
+monolith-service:
+  replicaCount: 3
+  image:
+    tag: latest   # <-- replace with a tested commit SHA before deploying to prod
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+evaluation-service:
+  replicaCount: 3
+  image:
+    tag: latest   # <-- replace with a tested commit SHA before deploying to prod
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+
+worker-service:
+  replicaCount: 3
+  image:
+    tag: latest   # <-- replace with a tested commit SHA before deploying to prod
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  # No HPA — worker-service has no Service/HPA template per the spec.
+  # In production, monitor Celery queue depth (EvaluationQueueBacklog-style
+  # alert from the Prometheus setup) and scale replicaCount manually, or
+  # add KEDA later if queue-based autoscaling becomes necessary.
+
+rag-ui:
+  replicaCount: 3
+  image:
+    tag: latest   # <-- replace with a tested commit SHA before deploying to prod
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 384Mi
+  hpa:
+    enabled: false

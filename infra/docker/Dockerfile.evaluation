@@ -1,0 +1,76 @@
+# =============================================================================
+# infra/docker/Dockerfile.evaluation
+#
+# evaluation-service — RAGAS LLM-as-judge scoring (faithfulness, relevance,
+# completeness). Runs as THREE roles from the SAME image:
+#   1. FastAPI app       (api)    — exposes /evaluate, /evaluate/logs, /metrics
+#   2. Celery worker      (worker) — runs the evaluate_recent_answers task
+#   3. Celery beat         (beat)   — schedules evaluate_recent_answers every 30 min
+#
+# These map directly to what's already running locally per the project logs:
+#   evaluation-worker  -> celery worker, queue=evaluation
+#   evaluation-beat    -> celery beat
+#   (the FastAPI /evaluate routes are merged into monolith-service in main.py,
+#    BUT this Dockerfile builds evaluation-service as its own standalone image
+#    too, per the Helm spec's explicit "evaluation-service: FastAPI + Celery,
+#    port 8005, main:app" entry — kept separate from monolith on purpose so it
+#    can scale/restart independently of the rest of the gateway.)
+#
+# WHY A SEPARATE IMAGE FROM monolith/worker:
+#   evaluation-service/requirements.txt is fully standalone — it does NOT
+#   pull in the root requirements.txt. It has its own pinned RAGAS stack
+#   (ragas==0.4.3, langchain-community==0.3.27 pin, sentence-transformers)
+#   and does not need PaddleOCR/Surya/GLiNER/torch's full weight at all.
+#   Sharing Dockerfile.base here would bloat this image for no reason.
+#
+# BUILD CONTEXT: repo root (consistent with the other Dockerfiles, and
+# because services/shared/ is still needed for the metrics module).
+#
+# Build:
+#   docker build -f infra/docker/Dockerfile.evaluation -t rag-evaluation:dev .
+#
+# Run examples (the Helm chart sets these as the container `command`,
+# this is just for local smoke testing before Helm/K8s):
+#   docker run --rm -p 8005:8005 --env-file services/evaluation-service/.env \
+#       rag-evaluation:dev uvicorn main:app --host 0.0.0.0 --port 8005
+#   docker run --rm --env-file services/evaluation-service/.env \
+#       rag-evaluation:dev celery -A celery_app worker --loglevel=info -Q evaluation --pool=solo
+#   docker run --rm --env-file services/evaluation-service/.env \
+#       rag-evaluation:dev celery -A celery_app beat --loglevel=info
+# =============================================================================
+
+FROM python:3.11-slim AS evaluation
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid 1000 appuser && \
+    useradd --uid 1000 --gid appuser --shell /bin/bash --create-home appuser
+
+WORKDIR /app
+
+# --- Dependency install (cached layer) --------------------------------------
+COPY services/evaluation-service/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r /app/requirements.txt
+
+# --- Application code -------------------------------------------------------
+COPY services/evaluation-service/ /app/services/evaluation-service/
+COPY services/shared/             /app/services/shared/
+
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+WORKDIR /app/services/evaluation-service
+
+EXPOSE 8005
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8005/health || exit 1
+
+# Default CMD is the API role. The Helm chart's worker/beat Deployments
+# override `command:` explicitly — see charts/evaluation-service templates.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8005"]

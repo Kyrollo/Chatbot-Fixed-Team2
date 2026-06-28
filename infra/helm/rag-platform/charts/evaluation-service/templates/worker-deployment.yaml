@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-evaluation-service-worker
+  labels:
+    app: evaluation-service
+    role: worker
+    release: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.workerReplicaCount }}
+  selector:
+    matchLabels:
+      app: evaluation-service
+      role: worker
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: evaluation-service
+        role: worker
+        release: {{ .Release.Name }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: evaluation-service-worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy | default .Values.global.imagePullPolicy }}
+          command:
+            {{- toYaml .Values.commands.worker | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-evaluation-service-config
+            - secretRef:
+                name: {{ .Values.existingSecretName }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

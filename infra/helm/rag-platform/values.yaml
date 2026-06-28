@@ -1,0 +1,60 @@
+# =============================================================================
+# infra/helm/rag-platform/values.yaml
+#
+# Base values for the umbrella chart. These are the DEFAULTS — each
+# environment file (values-dev.yaml / values-staging.yaml / values-prod.yaml)
+# overrides replicas, resource requests, and a few env-specific settings.
+#
+# Deploy with an environment override, e.g.:
+#   helm install rag-platform ./infra/helm/rag-platform -f values-dev.yaml
+#
+# Do NOT deploy with this file alone in a real environment — it has no
+# environment selected, so it falls back to whatever each subchart's own
+# values.yaml hardcodes (dev-like, conservative defaults).
+# =============================================================================
+
+# --- Image registry ----------------------------------------------------------
+# No registry has been chosen yet (confirmed with the team). Images are
+# built and tagged locally (rag-monolith:dev, rag-worker:dev,
+# rag-evaluation:dev) and loaded directly into the local cluster
+# (e.g. `minikube image load rag-monolith:dev` or `kind load docker-image`).
+#
+# imagePullPolicy is IfNotPresent so the cluster uses the locally-loaded
+# image instead of trying to pull from a registry that doesn't exist yet.
+# When a registry IS chosen later, only `repository` below needs to change
+# to something like "ghcr.io/yourorg/rag-monolith" — nothing else in the
+# chart needs to change.
+global:
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+# --- External dependencies ----------------------------------------------------
+# PostgreSQL, Redis, and Keycloak are NOT deployed by this chart (per the
+# spec table marking them "External"). These values are only used to build
+# the ConfigMap/Secret entries injected into each subchart's envFrom — the
+# actual services must already be reachable from the cluster at these
+# addresses (e.g. via a Service of type ExternalName, a VM on the same
+# network, or a managed cloud database).
+externalServices:
+  postgres:
+    host: "postgres-external.default.svc.cluster.local"
+    port: 5433
+  redis:
+    host: "redis-external.default.svc.cluster.local"
+    port: 6379
+  keycloak:
+    host: "keycloak-external.default.svc.cluster.local"
+    port: 8180
+
+# --- Subchart toggles ---------------------------------------------------------
+monolith-service:
+  enabled: true
+
+evaluation-service:
+  enabled: true
+
+worker-service:
+  enabled: true
+
+rag-ui:
+  enabled: true

@@ -1,0 +1,49 @@
+# NOTE: replicas is hardcoded to 1 here, NOT sourced from values.yaml.
+# Running more than one Celery beat instance causes the scheduled
+# evaluate_recent_answers task to fire multiple times per interval —
+# this is a Celery beat constraint, not a preference, so it's intentionally
+# not exposed as a configurable value to prevent misconfiguration.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-evaluation-service-beat
+  labels:
+    app: evaluation-service
+    role: beat
+    release: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: evaluation-service
+      role: beat
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: evaluation-service
+        role: beat
+        release: {{ .Release.Name }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: evaluation-service-beat
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy | default .Values.global.imagePullPolicy }}
+          command:
+            {{- toYaml .Values.commands.beat | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-evaluation-service-config
+            - secretRef:
+                name: {{ .Values.existingSecretName }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
