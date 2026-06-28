@@ -25,6 +25,8 @@ A complete backend + frontend stack for domain management, document ingestion, h
 15. [Directory Layout](#15-directory-layout)
 16. [Quick Reference Card](#16-quick-reference-card)
 17. [Sprint 3 — Hybrid Graph RAG (Apache AGE)](#17-sprint-3--hybrid-graph-rag-apache-age)
+18. [Monitoring — Prometheus + Grafana](#18-monitoring--prometheus--grafana)
+19. [Load Testing — Infrastructure Monitoring](#19-load-testing--infrastructure-monitoring)
 
 ---
 
@@ -1497,15 +1499,11 @@ FRONTEND (new terminal):
   # → http://localhost:5173
 
 HEALTH CHECKS:
-  http://localhost:8001/health         # domain-service
-  http://localhost:8002/health         # ingestion-service
-  http://localhost:8003/health         # retrieval-service
-  http://localhost:8004/generate/health# generation-service
-  http://localhost:8005/docs           # evaluation Swagger
+  http://localhost:8000/health         # monolith-service health
   http://localhost:8180/realms/rag-system # Keycloak realm
 
 SWAGGER UIs:
-  http://localhost:8001/docs  → http://localhost:8004/docs
+  http://localhost:8000/docs           # Monolith Swagger UI
 
 DEV AUTH USERS:
   admin       → system_admin (create domains, all operations)
@@ -1514,7 +1512,7 @@ DEV AUTH USERS:
   viewer      → reader (query only)
 
 TOKEN (dev auth):
-  POST http://localhost:8001/domains/auth/login
+  POST http://localhost:8000/domains/auth/login
   Body: {"user_id": "admin"}
 
 TYPICAL FLOW:
@@ -1746,3 +1744,381 @@ GROUP BY model;
 | `listen_addresses` not set | Inside WSL2: `sudo nano /etc/postgresql/17/main/postgresql.conf` → set `listen_addresses = '*'`, then `sudo service postgresql restart` |
 
 ---
+
+## 18. Monitoring — Prometheus + Grafana
+
+Real-time observability for every service: request latency, error rates, evaluation quality scores, retrieval pipeline stage breakdown, and Celery worker health — all visible in pre-built Grafana dashboards with alerting to Slack.
+
+### 18.1 What Gets Monitored
+
+| Service | What is tracked |
+|---|---|
+| domain-service | Request rate, error rate, p50/p95/p99 latency |
+| ingestion-service | Request rate, error rate, latency |
+| retrieval-service | Per-stage latency (embed/dense/sparse/RRF/rerank), cache hit rate, stage errors, RRF top score |
+| generation-service | Request rate, error rate, latency |
+| evaluation-service | Eval score per judge type (custom_judge / ragas), eval latency, judge reachability, failure rate |
+| worker-service (Celery) | Task throughput, task duration p50/p95, in-flight tasks, worker UP/DOWN |
+
+### 18.2 Architecture
+
+```
+Monolith service (port 8000)                Celery worker-service
+  exposes GET /metrics                      exposes /metrics on :9090
+         │                                        │
+         └──────────────┬─────────────────────────┘
+                        ▼
+              Prometheus (Docker :9092)
+              scrapes every 15 seconds
+                        │
+          ┌─────────────┴──────────────┐
+          ▼                            ▼
+  Grafana (Docker :3000)      Alertmanager (Docker :9093)
+  4 dashboards pre-loaded      fires Slack alerts on threshold
+```
+
+### 18.3 Files Added
+
+```
+Chatbot-Fixed-Team2/
+├── monitoring/
+│   ├── docker-compose.monitoring.yml      ← starts Prometheus + Grafana + Alertmanager
+│   ├── prometheus/
+│   │   ├── prometheus.yaml                ← scrape config (all 6 targets)
+│   │   └── alerts.yaml                    ← 8 alert rules
+│   ├── grafana/
+│   │   ├── datasources/
+│   │   │   └── prometheus-datasource.yaml
+│   │   ├── provisioning/
+│   │   │   └── dashboards.yaml
+│   │   └── dashboards/
+│   │       ├── service-health.json        ← Dashboard 1: request rate, errors, latency
+│   │       ├── evaluation-quality.json    ← Dashboard 2: eval scores, judge reachability
+│   │       ├── infra-overview.json        ← Dashboard 3: Celery tasks, worker health
+│   │       └── retrieval-pipeline.json    ← Dashboard 4: per-stage retrieval breakdown
+│   └── alertmanager/
+│       └── alertmanager.yaml
+└── services/
+    └── shared/
+        └── service_metrics.py             ← shared /metrics endpoint for 4 FastAPI services
+```
+
+> `evaluation-service` has its own `metrics.py` (multiprocess-safe, uses `prometheus_fastapi_instrumentator`).
+> `retrieval-service` additionally has `retrieval_metrics.py` for pipeline-stage metrics.
+
+### 18.4 Prerequisites
+
+- **Docker Desktop** running
+- `pip install prometheus-client` in your venv (add to `requirements.txt`)
+- `prometheus-fastapi-instrumentator` already installed (used by evaluation-service)
+
+### 18.5 One-Time Code Setup
+
+#### Step 1 — Add to each service's `main.py` (domain, ingestion, retrieval, generation)
+
+```python
+from service_metrics import metrics_router, instrument_app
+
+app = FastAPI(title="generation-service")
+instrument_app(app, service_name="generation-service")   # middleware
+app.include_router(metrics_router)                        # GET /metrics
+```
+
+Change `service_name` per service. The shared `service_metrics.py` lives in `services/shared/` — importable because `run_services.py` adds `services/shared/` to `sys.path`.
+
+#### Step 2 — evaluation-service `main.py`
+
+```python
+from metrics import setup_metrics   # uses evaluation-service's own metrics.py
+
+app = FastAPI(title="evaluation-service")
+setup_metrics(app)
+```
+
+#### Step 3 — Add to `.env`
+
+```ini
+PYTHONPATH=services/shared
+PROMETHEUS_MULTIPROC_DIR=./tmp/prometheus_multiproc
+```
+
+`PROMETHEUS_MULTIPROC_DIR` is required so evaluation-service's Celery worker and FastAPI process share metric state correctly.
+
+### 18.6 Starting the Monitoring Stack
+
+```powershell
+# Start your services as normal first
+python run_services.py --worker --evaluation
+
+# Then in a NEW terminal — start monitoring
+cd monitoring
+docker compose -f docker-compose.monitoring.yml up -d
+
+# Verify all 3 containers are running
+docker compose -f docker-compose.monitoring.yml ps
+```
+
+### 18.7 Verifying Services Are Scraped
+
+```powershell
+# If using Command Prompt or standard curl:
+curl http://localhost:8000/metrics
+curl http://localhost:9090/metrics   # Celery worker
+
+# If using PowerShell:
+Invoke-WebRequest http://localhost:8000/metrics -UseBasicParsing
+Invoke-WebRequest http://localhost:9090/metrics -UseBasicParsing   # Celery worker
+```
+
+Then open **http://localhost:9092/targets** — the active targets should show state **UP**.
+
+### 18.8 Opening the Dashboards
+
+Navigate to **http://localhost:3000** — login with `admin` / `admin`.
+
+Go to **Dashboards → RAG Platform**:
+
+| Dashboard | What you see |
+|---|---|
+| **Service Health** | Request rate per service, 5xx error rate, p50/p95/p99 latency, requests in-flight |
+| **Evaluation Quality** | Eval score by judge type (color-coded 0–1), eval latency, judge UP/DOWN, failure rate % |
+| **Infra Overview** | Celery worker status, task throughput success/failure, task duration p50/p95, 24h totals |
+| **Retrieval Pipeline** | Per-stage latency (embed/dense/sparse/RRF/rerank), Qdrant vs BM25 vs reranker breakdown, cache hit rate, stage errors |
+
+### 18.9 Alert Rules
+
+8 alerts are pre-configured in `monitoring/prometheus/alerts.yaml`:
+
+| Alert | Condition | Severity |
+|---|---|---|
+| `JudgeLLMUnreachable` | `eval_judge_reachable == 0` for 2 min | critical |
+| `EvalFailureRateHigh` | >10% eval failures over 15 min | warning |
+| `GenerationLatencyHigh` | generation p95 > 5 s for 5 min | warning |
+| `ServiceHighErrorRate` | >5% 5xx rate for 5 min on any service | critical |
+| `CeleryWorkerDown` | `celery_worker_up == 0` for 2 min | critical |
+| `CeleryIngestionBacklog` | >10 tasks in-flight for 10 min | warning |
+| `RetrievalStageErrors` | any retrieval stage > 0.1 errors/s for 5 min | warning |
+| `RetrievalLatencyHigh` | retrieval pipeline p95 > 3 s for 5 min | warning |
+
+### 18.10 Slack Alerts (Optional)
+
+1. Create a Slack webhook at https://api.slack.com/messaging/webhooks
+2. Edit `monitoring/alertmanager/alertmanager.yaml`:
+   ```yaml
+   global:
+     slack_api_url: "https://hooks.slack.com/services/YOUR/ACTUAL/WEBHOOK"
+   ```
+3. Reload: `curl -X POST http://localhost:9093/-/reload`
+
+Critical alerts go to `#rag-alerts-critical`, warnings to `#rag-alerts`.
+
+### 18.11 Stopping the Monitoring Stack
+
+```powershell
+cd monitoring
+docker compose -f docker-compose.monitoring.yml down
+
+# To also wipe all stored metrics data:
+docker compose -f docker-compose.monitoring.yml down -v
+```
+
+### 18.12 Monitoring Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Target shows `connection refused` in Prometheus | Service not running or `/metrics` not wired in `main.py`. Run `curl localhost:800X/metrics`. |
+| Grafana shows "No data" | Datasource URL must be `http://prometheus:9090` (container name). Already set in `prometheus-datasource.yaml`. |
+| Celery metrics target DOWN | `start_metrics_server(9090)` not called at worker startup. Check worker logs for `[celery-metrics] Prometheus metrics server started`. |
+| `ValueError: Duplicated timeseries` on service start | `service_metrics.py` registered twice. The `_get_or_create()` guard in `service_metrics.py` prevents this — ensure you're importing from `service_metrics`, not `metrics`. |
+| evaluation-service metrics always 0 in Grafana | `PROMETHEUS_MULTIPROC_DIR` not set in `.env` or not seen by all 3 evaluation processes (FastAPI + Celery worker + Celery beat). Set it in `.env`, not in the shell. |
+| Prometheus config change not picked up | Hot-reload: `curl -X POST http://localhost:9092/-/reload` |
+
+---
+
+## 19. Load Testing — Infrastructure Monitoring
+
+---
+
+### What Load Testing Infra Means
+
+Load testing is the practice of sending many requests to your system at the same time to see how it behaves under pressure. Most developers run load tests and only look at the HTTP-level numbers Locust gives them — response times and error rates. That tells you **whether** the system is slow, but not **why**.
+
+Infrastructure monitoring during a load test answers the **why**. It watches the internal state of every layer of the stack — CPU, memory, the database, the cache — while the load test is running. When something goes wrong, you can see exactly which resource hit its limit first.
+
+For this project that means:
+
+| What we measure | Why it matters |
+|---|---|
+| **CPU usage** | High CPU with slow responses → the service needs more cores or worker processes |
+| **Memory usage** | Swapping to disk makes everything 10–100× slower; OOM kills crash services silently |
+| **PostgreSQL connections** | Each service holds a pool. Under 50 users, pools can saturate max_connections (100 by default), causing queued or refused DB calls |
+| **Redis memory** | If Redis hits its memory limit, it starts evicting cached results. A cache miss forces a full retrieval + LLM call every time — latency spikes immediately |
+| **Request latency (p50, p95, p99)** | p95 < 3 s is the pass criterion. p99 shows tail behaviour — the worst 1% of users |
+| **Error rate** | Anything above 5% is a failure. Errors include 5xx responses, timeouts, and connection refused |
+
+The goal is to have all of this data *before*, *during*, and *after* the load test so you can compare and know exactly what changed, what broke, and what fixed it.
+
+---
+
+### Monitoring Stack
+
+The monitoring stack runs as a separate Docker Compose group from the main application services. It is started independently and scrapes metrics from the running services over HTTP.
+
+#### Prometheus (`http://localhost:9092`)
+
+Prometheus is a time-series database that **collects metrics** by scraping HTTP endpoints every 15 seconds. Every FastAPI service exposes a `/metrics` endpoint (via `prometheus-fastapi-instrumentator`) and the Celery worker exposes one on port 9090. Prometheus pulls from all of them and stores the data locally.
+
+It also evaluates **alert rules** defined in `monitoring/prometheus/alerts.yaml`. When a rule fires (e.g. p95 > 3 s for 5 minutes), Prometheus sends the alert to Alertmanager.
+
+#### Grafana (`http://localhost:3000`, login: admin / admin)
+
+Grafana is the **visualisation layer**. It reads from Prometheus and renders the data as dashboards. Three dashboards are pre-loaded:
+
+| Dashboard | What it shows | When to use it |
+|---|---|---|
+| **infra-overview** | CPU, memory, PostgreSQL connections, Redis memory, system load | Primary panel during the load test — tells you when a resource is saturated |
+| **service-health** | HTTP request rate, p50/p95/p99 latency, error rate, per-endpoint breakdown | Tells you which endpoint is slow and by how much |
+| **evaluation-quality** | LLM judge scores (faithfulness, relevance, completeness) over time | Tells you whether answer quality degrades under load |
+
+#### Alertmanager (`http://localhost:9093`)
+
+Alertmanager **routes and deduplicates** alerts from Prometheus. When a threshold is crossed and the alert fires, Alertmanager sends a Slack notification (if configured) to the appropriate channel. It prevents alert storms by grouping and silencing duplicate notifications. You do not need to watch Alertmanager directly — Grafana shows alert state, and Slack receives the notification.
+
+---
+
+### How To Use It — Step by Step
+
+#### Step 1: Start the Monitoring Stack
+
+Open a terminal in the project root and run:
+
+```powershell
+cd monitoring
+docker compose -f docker-compose.monitoring.yml up -d
+```
+
+Verify all three containers started:
+
+```powershell
+docker compose -f docker-compose.monitoring.yml ps
+```
+
+You should see `rag-prometheus`, `rag-grafana`, and `rag-alertmanager` all in state `running`.
+
+Open Grafana at **http://localhost:3000** and log in (admin / admin). Navigate to **Dashboards → infra-overview** and confirm you see live data points — if the panels are empty, the services are not running yet.
+
+> **Note:** Prometheus is on port `9092` (not 9090) to avoid clashing with the Celery worker's metrics server on port 9090.
+
+#### Step 2: Run `monitoring/scripts/baseline.sh` and Save Results
+
+With all application services running but **no users active**, capture the idle state:
+
+```bash
+bash monitoring/scripts/baseline.sh
+```
+
+The script collects CPU, memory, PostgreSQL connections, and Redis memory, then writes everything to `monitoring/baseline_results.txt` and prints it to the terminal.
+
+Copy the values into the **Section 1 — Baseline Metrics** table in `docs/load_test_infra_report.md`. This is your reference point. If a metric doubles during the load test, you will know by how much because you have the starting number.
+
+#### Step 3: Start the Locust Load Test
+
+Make sure all application services are running first:
+
+```powershell
+python run_services.py --worker --evaluation
+```
+
+Then start Locust. Use the **web UI** for interactive ramp-up:
+
+```bash
+locust -f tests/load_test.py --host=http://localhost:8000
+```
+
+Open **http://localhost:8089**, set **Number of users: 10** and **Ramp up: 2 users/sec**, then click Start. Let it stabilise, then increase to 25, then 50. Record Locust stats at each level.
+
+Or run the full 3-minute headless test directly:
+
+```bash
+locust -f tests/load_test.py --host=http://localhost:8000 \
+       --users 50 --spawn-rate 5 --run-time 3m \
+       --headless --csv=tests/load_results
+```
+
+> **Prerequisite:** `admin`, `test_reader`, and `test_contrib` must exist in the `users` table. Run `pytest tests/test_rbac.py` first — it seeds the test users — or insert them manually.
+
+#### Step 4: What to Watch in Grafana During the Test
+
+Keep two browser tabs open: **infra-overview** and **service-health**.
+
+**On infra-overview — warning signs to watch for:**
+
+| Panel | Warning sign | What it means |
+|---|---|---|
+| DB Connections | Count approaching `max_connections` (default 100) | Connection pool exhaustion — next requests will queue or fail |
+| Redis Memory | `used_memory` near `maxmemory` | Redis will start evicting cache entries → cache miss storm |
+| Redis Evictions | Counter climbing above 0 | Cache entries being dropped — latency will spike |
+| CPU % | Sustained > 85% | Service is CPU-bound — more workers or a faster machine needed |
+| Memory Used | Approaching total RAM (swap starts) | OOM risk — consider reducing model batch size or adding RAM |
+| System Load Avg | 1-minute load > number of CPU cores | System is overloaded beyond capacity |
+
+**On service-health — warning signs to watch for:**
+
+| Panel | Warning sign | What it means |
+|---|---|---|
+| p95 Latency | > 3000 ms | Failing the load test pass criterion |
+| Error Rate | > 5% | Failing the load test pass criterion |
+| Request Rate by endpoint | `generate/query` RPS drops while user count rises | The LLM call is the bottleneck |
+| Error Rate by endpoint | Errors concentrated on one service | That service is the bottleneck, not the whole system |
+
+#### Step 5: Run `monitoring/scripts/tuning.sh` if a Bottleneck Appears
+
+The tuning script has one section per bottleneck type. Run **only** the section that matches what you saw in Grafana — do not run the whole script blindly.
+
+```bash
+# Fix PostgreSQL connection pool exhaustion:
+bash monitoring/scripts/tuning.sh A
+
+# Fix Redis memory limit and eviction:
+bash monitoring/scripts/tuning.sh B
+
+# Increase Uvicorn / Celery worker processes:
+bash monitoring/scripts/tuning.sh C
+
+# Find slow queries with EXPLAIN ANALYZE:
+bash monitoring/scripts/tuning.sh D
+
+# Add missing database indexes:
+bash monitoring/scripts/tuning.sh E
+```
+
+After applying a fix, **re-run the load test** at the same user count and compare Grafana. Record both the before and after values in `docs/load_test_infra_report.md` Section 4.
+
+#### Step 6: Fill in the Load Test Infra Report
+
+Open `docs/load_test_infra_report.md` and fill in every table:
+
+1. **Section 1** — paste baseline values from `monitoring/baseline_results.txt`
+2. **Section 2** — record peak Grafana values at 10, 25, and 50 users
+3. **Section 3** — list every bottleneck observed with the warning sign you saw
+4. **Section 4** — document every fix applied and its before/after result
+5. **Section 5** — fill in the final verdict table and overall PASS / FAIL box
+6. **Section 6** — paste the `tests/load_results_stats.csv` Locust output
+7. **Section 7** — attach Grafana screenshots at peak load
+
+The completed report is the deliverable for this load test cycle and goes into the go-live checklist.
+
+---
+
+### Bottleneck Quick Reference
+
+| Bottleneck | Warning Sign in Grafana | `tuning.sh` Command |
+|---|---|---|
+| **PostgreSQL connection pool exhaustion** | DB Connections panel near `max_connections`; "too many connections" in logs | `bash tuning.sh A` |
+| **Redis memory limit hit** | Redis Memory panel at or above `maxmemory`; evictions counter > 0 | `bash tuning.sh B` |
+| **Too few Uvicorn workers** | High p95 latency, low CPU usage — requests queuing, not computing | `bash tuning.sh C` |
+| **Too few Celery workers** | Celery backlog panel rising; documents stuck in `pending` status | `bash tuning.sh C` |
+| **Slow database queries** | Query Duration panel shows high p95 on specific endpoints; slow query log entries | `bash tuning.sh D` |
+| **Missing database indexes** | EXPLAIN ANALYZE shows `Seq Scan` on large tables; high `heap_blks_read` | `bash tuning.sh E` |
+| **OOM / swap usage** | RAM Used panel near total; system load average > CPU core count; service crashes | Scale vertically or reduce `pool_size` per service |
+| **LLM latency** | `generate/query` endpoint p95 very high even with low DB/Redis pressure | Switch to Groq (faster than Ollama); enable response caching; reduce `max_tokens` |

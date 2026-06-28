@@ -3,6 +3,9 @@ from contextlib import asynccontextmanager
 from storage import create_tables
 from routes.ingest import router
 
+from service_metrics import metrics_router, instrument_app
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -20,6 +23,8 @@ app = FastAPI(
 )
 
 app.include_router(router)
+instrument_app(app, service_name="ingestion-service")
+app.include_router(metrics_router)
 
 
 @app.get("/health")

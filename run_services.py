@@ -72,8 +72,8 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
     password = quote(out.get("POSTGRES_PASSWORD", "postgres"), safe="")
     db       = out.get("POSTGRES_DB", "domain_db")
     pg_port  = out.get("POSTGRES_PORT", "5432")
-    out["DATABASE_URL"]      = f"postgresql+asyncpg://{user}:{password}@localhost:{pg_port}/{db}"
-    out["SYNC_DATABASE_URL"] = f"postgresql://{user}:{password}@localhost:{pg_port}/{db}"
+    out.setdefault("DATABASE_URL", f"postgresql+asyncpg://{user}:{password}@localhost:{pg_port}/{db}")
+    out.setdefault("SYNC_DATABASE_URL", f"postgresql://{user}:{password}@localhost:{pg_port}/{db}")
 
     if use_redis:
         redis_port = out.get("REDIS_PORT", "6379")
@@ -86,7 +86,7 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
     out["QDRANT_PATH"] = str(ROOT / "data" / "qdrant")
     out.pop("QDRANT_URL", None)
 
-    # ── Apache AGE (graph DB — WSL2 on port 5434) ──
+    # ── Apache AGE (graph DB — WSL2 on port 5433) ──
     out.setdefault("AGE_DATABASE_DSN", "")
     out.setdefault("AGE_GRAPH_NAME", "rag_graph")
 

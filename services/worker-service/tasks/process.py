@@ -77,18 +77,17 @@ def process_document_sync(document_id: str) -> dict:
     
     print("  Pre-loading models...")
     t0 = time.perf_counter()
-    
+
     print("  [Model 1/2] Embedding model...")
     _ = get_model()  # blocks until loaded
     print(f"  [Model 1/2] Ready ({time.perf_counter()-t0:.1f}s)")
-    
-    t1 = time.perf_counter()
-    print("  [Model 2/2] NER model...")
-    from ner import get_ner_model
-    _ = get_ner_model()  # blocks until loaded
-    print(f"  [Model 2/2] Ready ({time.perf_counter()-t1:.1f}s)")
-    
-    print(f"  All models loaded in {time.perf_counter()-t0:.1f}s")
+
+    # NER model (GLiNer) is NOT pre-loaded here — it crashes Windows memory
+    # when loaded upfront via PyTorch. It is loaded lazily inside the
+    # try/except at step 5, so a crash there is caught and the document
+    # still completes indexing via Vector + BM25.
+    print("  [Model 2/2] NER model — will load at step 5 (lazy)")
+    print(f"  Embedding model ready in {time.perf_counter()-t0:.1f}s")
 
     update_document_status(document_id, "processing")
 

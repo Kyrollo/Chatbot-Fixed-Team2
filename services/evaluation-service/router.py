@@ -18,7 +18,10 @@ from fastapi import APIRouter, HTTPException, status
 
 from config import settings
 from judge import JudgeService, check_judge_health
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from metrics import eval_score_gauge, eval_latency
+sys.path.pop(0)
 from schemas import EvaluationRequest, EvaluationResponse
 
 logger = logging.getLogger(__name__)

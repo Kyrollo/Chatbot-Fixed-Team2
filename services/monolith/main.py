@@ -6,11 +6,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 ROOT = Path(__file__).resolve().parents[2]
+import sys, os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
 
 def purge_local_modules():
     for name in list(sys.modules.keys()):
-        # Remove local service modules from sys.modules cache
-        # so that each service can import its local version of 'config', 'router', etc.
         if name in ("config", "router", "dependencies", "database", "models", "schemas", "service", "routes"):
             del sys.modules[name]
         elif name.startswith("routes.") or name.startswith("services."):
@@ -193,16 +194,24 @@ for sub_app in [domain_app, ingestion_app, retrieval_app, generation_app, evalua
             continue
         app.routes.append(route)
 
-# Setup unified metrics
-sys.path.insert(0, str(ROOT / "services" / "evaluation-service"))
+# ── Setup unified metrics ──────────────────────────────────────────────────────
+# Uses service_metrics (shared) to instrument ALL requests passing through the
+# monolith and expose a single /metrics endpoint for Prometheus to scrape.
+# Also merges evaluation-service's own Prometheus metrics (counters, gauges,
+# histograms) into the same /metrics response via the shared REGISTRY.
+shared_dir = str(ROOT / "services" / "shared")
+sys.path.insert(0, shared_dir)
 purge_local_modules()
 try:
-    from metrics import setup_metrics
-    setup_metrics(app)
+    from service_metrics import instrument_app, metrics_router
+    instrument_app(app, service_name="monolith")
+    app.include_router(metrics_router)
+    print("  [Metrics] Monolith /metrics endpoint ready")
 except Exception as exc:
     print(f"  [Metrics] Setup failed: {exc}")
 finally:
-    sys.path.remove(str(ROOT / "services" / "evaluation-service"))
+    if shared_dir in sys.path:
+        sys.path.remove(shared_dir)
 
 @app.get("/health", tags=["health"])
 async def root_health():

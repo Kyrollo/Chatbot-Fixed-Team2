@@ -1,0 +1,46 @@
+global:
+  resolve_timeout: 5m
+  # Fill in your Slack webhook URL here:
+  slack_api_url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+
+route:
+  receiver: slack-alerts
+  group_by: ["alertname", "service"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 1h
+  routes:
+    - match:
+        severity: critical
+      receiver: slack-critical
+      continue: true
+
+receivers:
+  - name: slack-alerts
+    slack_configs:
+      - channel: "#rag-alerts"
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Details:* {{ .Annotations.description }}
+          *Runbook:* {{ .Annotations.runbook }}
+          {{ end }}
+
+  - name: slack-critical
+    slack_configs:
+      - channel: "#rag-alerts-critical"
+        title: '🚨 CRITICAL: {{ .CommonLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Details:* {{ .Annotations.description }}
+          *Runbook:* {{ .Annotations.runbook }}
+          {{ end }}
+
+inhibit_rules:
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    equal: ["service"]

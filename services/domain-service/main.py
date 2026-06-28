@@ -7,6 +7,9 @@ from database import dispose_engine, init_db
 from router import internal_router, router
 from monitoring_router import router as monitoring_router
 
+from service_metrics import metrics_router, instrument_app
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -23,7 +26,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
-
+instrument_app(app, service_name="domain-service")
+app.include_router(metrics_router)
 app.include_router(router)
 app.include_router(internal_router)
 app.include_router(monitoring_router)
