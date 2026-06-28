@@ -1,0 +1,66 @@
+# =============================================================================
+# infra/docker/Dockerfile.rag-ui
+#
+# rag-ui — Vite + React + TypeScript + Tailwind frontend, served by nginx.
+#
+# Multi-stage build:
+#   Stage 1 (node:20-alpine) — npm ci + npm run build, produces static
+#     files in services/rag-ui/dist/
+#   Stage 2 (nginx:alpine) — serves those static files, proxies /api/*
+#     to monolith-service inside the cluster
+#
+# BUILD CONTEXT: repo root, same as every other Dockerfile in this project
+# (kept consistent even though rag-ui itself doesn't need the ROOT-relative
+# path trick monolith does — using the same context for every Dockerfile
+# means one mental model, one .dockerignore, one CI workflow pattern).
+#
+# Build:
+#   docker build -f infra/docker/Dockerfile.rag-ui -t rag-system/rag-ui:dev .
+#
+# Run (local smoke test, before Helm/K8s):
+#   docker run --rm -p 8080:80 \
+#     -e MONOLITH_SERVICE_HOST=localhost -e MONOLITH_SERVICE_PORT=8000 \
+#     rag-system/rag-ui:dev
+# =============================================================================
+
+# --- Stage 1: build -----------------------------------------------------------
+FROM node:20-alpine AS build
+
+WORKDIR /app
+
+# package-lock.json is present in the repo (confirmed) — npm ci is used
+# instead of npm install for a reproducible, lockfile-exact install.
+COPY services/rag-ui/package.json services/rag-ui/package-lock.json ./
+RUN npm ci
+
+COPY services/rag-ui/ ./
+RUN npm run build
+
+# --- Stage 2: serve ------------------------------------------------------------
+FROM nginx:alpine AS serve
+
+# envsubst (from the gettext package) is what substitutes
+# ${MONOLITH_SERVICE_HOST} / ${MONOLITH_SERVICE_PORT} into nginx.conf at
+# container startup — nginx:alpine does not include it by default.
+RUN apk add --no-cache gettext curl
+
+COPY --from=build /app/dist /usr/share/nginx/html
+
+# Template, not the final config — substituted at startup, see CMD below.
+COPY infra/docker/nginx.conf /etc/nginx/templates/default.conf.template
+
+# --- Defaults ------------------------------------------------------------------
+# Overridden by the Helm Deployment's env vars in a real cluster — these
+# defaults only matter for local `docker run` testing in isolation.
+ENV MONOLITH_SERVICE_HOST=monolith-service
+ENV MONOLITH_SERVICE_PORT=8000
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost/health || exit 1
+
+# envsubst renders the real config from the template using the two env
+# vars above, then starts nginx in the foreground (required for it to
+# stay as the container's main process instead of daemonizing and exiting).
+CMD ["/bin/sh", "-c", "envsubst '$${MONOLITH_SERVICE_HOST} $${MONOLITH_SERVICE_PORT}' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]

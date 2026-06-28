@@ -1,0 +1,30 @@
+# =============================================================================
+# Minimal ConfigMap for rag-ui — currently holds no entries by default.
+#
+# WHY THIS EXISTS DESPITE BEING EMPTY:
+#   The original task spec asked for an "nginx configmap" per service.
+#   In this design, nginx.conf itself is baked into the image at build
+#   time (infra/docker/nginx.conf -> COPY'd in Dockerfile.rag-ui) and the
+#   one value that actually changes at runtime (which monolith-service to
+#   proxy to) is wired in via plain Deployment env vars + envsubst, not a
+#   ConfigMap-mounted file — because the monolith Service NAME depends on
+#   the Helm release name, which is template logic, not static config a
+#   ConfigMap would hold any better than the Deployment's own env block
+#   already does.
+#
+# This ConfigMap is kept as a placeholder specifically so that if rag-ui
+# later needs genuine runtime config (feature flags, a public API base
+# URL override, etc.), there's already a wired-up envFrom target in
+# deployment.yaml to extend — see config below.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-rag-ui-config
+  labels:
+    app: rag-ui
+    release: {{ .Release.Name }}
+data:
+  {{- range $key, $value := .Values.config | default dict }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

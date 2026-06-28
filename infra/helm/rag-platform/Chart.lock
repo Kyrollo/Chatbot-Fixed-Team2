@@ -1,0 +1,15 @@
+dependencies:
+- name: monolith-service
+  repository: file://charts/monolith-service
+  version: 0.1.0
+- name: evaluation-service
+  repository: file://charts/evaluation-service
+  version: 0.1.0
+- name: worker-service
+  repository: file://charts/worker-service
+  version: 0.1.0
+- name: rag-ui
+  repository: file://charts/rag-ui
+  version: 0.1.0
+digest: sha256:fe0ded645a8e395fdf1ccf39a20eafcaab9f56ef72739d1d5b8cf2a4879a723b
+generated: "2026-06-29T00:31:46.875838+03:00"

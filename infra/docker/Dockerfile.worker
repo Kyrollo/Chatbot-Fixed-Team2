@@ -1,0 +1,49 @@
+# =============================================================================
+# infra/docker/Dockerfile.worker
+#
+# worker-service — Celery worker that processes documents: OCR (PaddleOCR +
+# Surya fallback), chunking, embedding, NER (GLiNER), relation extraction,
+# and Qdrant + PostgreSQL + Apache AGE indexing.
+#
+# Shares the exact same requirements.txt as monolith-service (confirmed:
+# services/worker-service/requirements.txt is just `-r ../../requirements.txt`)
+# so this builds FROM the same Dockerfile.base — no separate heavy install.
+#
+# BUILD CONTEXT: repo root (same constraint as Dockerfile.monolith).
+#
+# Build:
+#   docker build -f infra/docker/Dockerfile.base -t rag-base:dev .
+#   docker build -f infra/docker/Dockerfile.worker -t rag-worker:dev .
+#
+# Run (local smoke test, before Helm/K8s):
+#   docker run --rm --env-file services/worker-service/.env rag-worker:dev
+# =============================================================================
+
+FROM rag-base:dev AS worker
+
+WORKDIR /app
+
+# --- Application code -------------------------------------------------------
+# worker-service is self-contained (worker.py, tasks/, ner.py, ontology.py,
+# relation_extraction.py, graph_writer.py, celery_metrics.py) — unlike the
+# monolith, it does NOT dynamically load other service folders, so only its
+# own directory plus the shared metrics module are needed.
+COPY services/worker-service/ /app/services/worker-service/
+COPY services/shared/         /app/services/shared/
+
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+WORKDIR /app/services/worker-service
+
+# No EXPOSE — Celery workers don't serve HTTP. Health is monitored via
+# Celery's own task heartbeat / Flower / the celery_metrics.py Prometheus
+# counters, scraped through the monolith's merged /metrics endpoint.
+
+# --pool=solo matches what run_services.py already uses locally (see the
+# project logs: "concurrency: 1 (solo)") — kept identical here so worker
+# behavior doesn't change between local dev and the containerized version.
+# -Q ingestion matches the queue name worker-service actually listens on
+# (confirmed in logs: ".> ingestion  exchange=ingestion(direct) key=ingestion").
+CMD ["celery", "-A", "worker", "worker", "--loglevel=info", "--pool=solo", "-Q", "ingestion"]

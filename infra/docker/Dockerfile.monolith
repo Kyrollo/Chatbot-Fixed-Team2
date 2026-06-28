@@ -1,0 +1,61 @@
+# =============================================================================
+# infra/docker/Dockerfile.monolith
+#
+# monolith-service — FastAPI gateway that dynamically loads domain-service,
+# ingestion-service, retrieval-service, generation-service, and
+# evaluation-service's routers into one process (see services/monolith/main.py).
+#
+# This Dockerfile is intentionally THIN. All heavy dependency installation
+# happens in Dockerfile.base — this file only adds source code and sets
+# the run command. That split means editing application code never
+# triggers a multi-minute pip reinstall; only changes to requirements.txt do.
+#
+# BUILD CONTEXT: repo root (NOT infra/docker/). Required because
+# services/monolith/main.py uses ROOT = parents[2] relative path math —
+# see Dockerfile.base header for the full explanation.
+#
+# Build:
+#   docker build -f infra/docker/Dockerfile.base -t rag-base:dev .
+#   docker build -f infra/docker/Dockerfile.monolith -t rag-monolith:dev .
+#
+# Run (local smoke test, before Helm/K8s):
+#   docker run --rm -p 8000:8000 --env-file services/domain-service/.env rag-monolith:dev
+# =============================================================================
+
+FROM rag-base:dev AS monolith
+
+WORKDIR /app
+
+# --- Application code -------------------------------------------------------
+# The monolith's main.py dynamically loads main.py/router.py/config.py etc.
+# from each sibling service folder BY FILE PATH at runtime (not via Python
+# package imports) — see ROOT = Path(__file__).resolve().parents[2] in
+# services/monolith/main.py. That means the exact relative folder structure
+# below must be preserved; we cannot flatten or rename these directories.
+COPY services/monolith/         /app/services/monolith/
+COPY services/domain-service/   /app/services/domain-service/
+COPY services/ingestion-service/ /app/services/ingestion-service/
+COPY services/retrieval-service/ /app/services/retrieval-service/
+COPY services/generation-service/ /app/services/generation-service/
+COPY services/evaluation-service/ /app/services/evaluation-service/
+COPY services/shared/            /app/services/shared/
+
+# --- Permissions -------------------------------------------------------------
+# Non-root user (created in Dockerfile.base) needs ownership of app code,
+# otherwise uvicorn fails to start or can't write __pycache__/logs.
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+WORKDIR /app/services/monolith
+
+EXPOSE 8000
+
+# --- Healthcheck -------------------------------------------------------------
+# Mirrors the /health route already defined in services/monolith/main.py.
+# Useful for local `docker run` smoke testing; Kubernetes will use its own
+# livenessProbe/readinessProbe defined in the Helm chart instead of this.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

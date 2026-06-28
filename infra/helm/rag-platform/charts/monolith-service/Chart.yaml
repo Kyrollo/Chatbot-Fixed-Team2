@@ -1,0 +1,9 @@
+apiVersion: v2
+name: monolith-service
+description: >-
+  FastAPI gateway hosting domain-service, ingestion-service,
+  retrieval-service, generation-service, and evaluation-service routes
+  in a single process via dynamic module loading (services/monolith/main.py).
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

@@ -1,0 +1,67 @@
+# =============================================================================
+# infra/helm/rag-platform/charts/monolith-service/values.yaml
+#
+# Defaults for this subchart. The umbrella chart's values-dev/staging/prod.yaml
+# override replicaCount, resources, and hpa settings under the
+# "monolith-service:" key — Helm merges them in automatically because of
+# how subcharts work (no extra wiring needed here).
+# =============================================================================
+
+replicaCount: 1
+
+image:
+  # Pushed by .github/workflows/docker-build-push.yml on every push to main.
+  # Tagged both `latest` and the 7-char commit SHA — use `latest` for quick
+  # local/dev iteration, pin to a specific SHA for staging/prod so you know
+  # exactly which build is running (and can roll back precisely).
+  repository: rag-system/rag-monolith
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8000
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 1Gi
+
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+# --- Config (non-secret) ------------------------------------------------------
+# Rendered into a ConfigMap, consumed via envFrom in the Deployment.
+# Ports/feature-flags only — anything sensitive goes in a Secret instead,
+# referenced by name below (NOT created by this chart — see CHANGES.md).
+config:
+  PORT: "8000"
+  RETRIEVAL_WARMUP_ON_START: "true"
+  WARMUP_EMBEDDING: "true"
+  WARMUP_RERANKER: "true"
+  ENABLE_RERANKER: "true"
+
+# --- Secret reference ---------------------------------------------------------
+# This chart does NOT create the Secret itself — it only references one by
+# name via envFrom. The Secret (containing GROQ_API_KEY, DB credentials,
+# JWT keys, AGE_DATABASE_DSN, etc.) must be created separately, e.g.:
+#   kubectl create secret generic rag-platform-secrets --from-env-file=.env
+# This keeps secret material out of values.yaml / git entirely.
+existingSecretName: "rag-platform-secrets"
+
+# --- Probes --------------------------------------------------------------------
+probes:
+  liveness:
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 15
+  readiness:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10

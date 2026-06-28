@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-rag-ui
+  labels:
+    app: rag-ui
+    release: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: rag-ui
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: rag-ui
+        release: {{ .Release.Name }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: rag-ui
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy | default .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+          envFrom:
+            - configMapRef:
+                name: {{ .Release.Name }}-rag-ui-config
+          env:
+            # This is the actual bridge between rag-ui's nginx proxy and
+            # monolith-service: it resolves to the real rendered Service
+            # name ("<release>-monolith-service"), not a hardcoded guess.
+            # Cross-subchart name reference — relies on monolith-service
+            # being installed in the SAME Helm release (true here, since
+            # both are subcharts of the same umbrella chart install).
+            - name: MONOLITH_SERVICE_HOST
+              value: "{{ .Release.Name }}-monolith-service"
+            - name: MONOLITH_SERVICE_PORT
+              value: "{{ .Values.monolith.port }}"
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

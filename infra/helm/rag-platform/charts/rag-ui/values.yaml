@@ -1,0 +1,55 @@
+# =============================================================================
+# infra/helm/rag-platform/charts/rag-ui/values.yaml
+#
+# rag-ui is the ONLY Service in this platform meant for external exposure.
+# It's still ClusterIP at the chart level — a teammate's separate Ingress +
+# cert-manager work is what actually makes it reachable from outside the
+# cluster with TLS. See the umbrella chart's README "TLS / public access"
+# section for the handoff details.
+# =============================================================================
+
+replicaCount: 1
+
+image:
+  # Pushed by .github/workflows/docker-build-push.yml on every push to main.
+  repository: rag-system/rag-ui
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
+# --- Backend target for nginx's /api/* proxy ----------------------------------
+# These become MONOLITH_SERVICE_HOST / MONOLITH_SERVICE_PORT env vars
+# inside the container, which the Dockerfile's CMD substitutes into
+# nginx.conf via envsubst at startup. monolithServiceName MUST match
+# the actual Service name the monolith-service subchart renders
+# ("<release-name>-monolith-service") — handled via the Deployment
+# template below using {{ .Release.Name }}, not hardcoded here.
+monolith:
+  port: 8000
+
+probes:
+  liveness:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 15
+  readiness:
+    path: /health
+    initialDelaySeconds: 5
+    periodSeconds: 10

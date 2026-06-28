@@ -1,0 +1,19 @@
+# This is the Service the teammate's Ingress (TLS/cert-manager work)
+# should route to: "{{ .Release.Name }}-rag-ui", port 80. See the
+# umbrella chart's README "TLS / public access" section.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-rag-ui
+  labels:
+    app: rag-ui
+    release: {{ .Release.Name }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: rag-ui
+    release: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http

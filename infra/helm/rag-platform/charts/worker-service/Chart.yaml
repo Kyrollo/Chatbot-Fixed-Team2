@@ -1,0 +1,10 @@
+apiVersion: v2
+name: worker-service
+description: >-
+  Celery worker for document ingestion: OCR (PaddleOCR + Surya fallback),
+  chunking, embedding, NER (GLiNER), relation extraction, and indexing into
+  Qdrant + PostgreSQL + Apache AGE. Deployment only — no HTTP, so no
+  Service or HPA, per spec.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

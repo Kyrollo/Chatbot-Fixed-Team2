@@ -1,0 +1,30 @@
+# =============================================================================
+# infra/helm/rag-platform/charts/worker-service/values.yaml
+#
+# worker-service has NO Service and NO HPA templates (per spec — Celery
+# worker, no HTTP, queue-depth based scaling doesn't map cleanly to CPU-based
+# HPA so it's deliberately left out rather than added on a weak assumption).
+# Only a Deployment exists in templates/.
+# =============================================================================
+
+replicaCount: 1
+
+image:
+  # Pushed by .github/workflows/docker-build-push.yml on every push to main.
+  repository: rag-system/rag-worker
+  tag: latest
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 1Gi
+
+config:
+  CELERY_QUEUE: "ingestion"
+  CELERY_POOL: "solo"
+
+existingSecretName: "rag-platform-secrets"
