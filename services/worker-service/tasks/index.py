@@ -13,7 +13,11 @@ from qdrant_client.models import VectorParams, Distance, PointStruct, UpdateStat
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 
-load_dotenv()
+root_env = Path(__file__).resolve().parents[3] / ".env"
+if root_env.exists():
+    load_dotenv(root_env)
+else:
+    load_dotenv()
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "scripts"))

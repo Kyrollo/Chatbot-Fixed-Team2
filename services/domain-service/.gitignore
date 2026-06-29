@@ -1,13 +1,12 @@
-# .gitignore
-
-# Python
+# Python Service .gitignore
 __pycache__/
-
-# Virtual Environments
-.venv/
-
-# Environment Variables
+*.py[cod]
+*.pyo
 .env
-
-# IDE / Editors
+.env.*
+.venv/
+venv/
 .vscode/
+.idea/
+*.log
+celerybeat-schedule*

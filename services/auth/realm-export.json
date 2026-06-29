@@ -1797,14 +1797,7 @@
           ]
         }
       },
-      {
-        "id": "8dbee1e4-d270-4c92-852f-c88f921a99a9",
-        "name": "Allowed Registration Web Origins",
-        "providerId": "registration-web-origins",
-        "subType": "anonymous",
-        "subComponents": {},
-        "config": {}
-      },
+
       {
         "id": "9f789f4d-46ba-4413-b601-224ba9b9b128",
         "name": "Allowed Protocol Mapper Types",
@@ -1836,14 +1829,7 @@
           ]
         }
       },
-      {
-        "id": "8d34c9d9-cb48-416f-bc7d-28bd36e3f749",
-        "name": "Allowed Registration Web Origins",
-        "providerId": "registration-web-origins",
-        "subType": "authenticated",
-        "subComponents": {},
-        "config": {}
-      },
+
       {
         "id": "c9bd72cb-87c7-4fee-ac48-4daa0049e2dc",
         "name": "Allowed Client Scopes",

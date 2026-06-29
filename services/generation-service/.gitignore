@@ -1,7 +1,12 @@
-# .gitignore for generation-service
+# Python Service .gitignore
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
 .env
+.env.*
 .venv/
+venv/
 .vscode/
+.idea/
 *.log
+celerybeat-schedule*

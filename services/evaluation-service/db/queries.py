@@ -41,6 +41,7 @@ import os
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from pathlib import Path
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
@@ -57,7 +58,11 @@ from db.models import (
     context_cache_key,
 )
 
-load_dotenv()
+root_env = Path(__file__).resolve().parents[3] / ".env"
+if root_env.exists():
+    load_dotenv(root_env)
+else:
+    load_dotenv()
 
 # Same resolution order as worker-service/tasks/process.py
 _raw_url = os.getenv("SYNC_DATABASE_URL") or os.getenv("DATABASE_URL")

@@ -27,8 +27,10 @@ import threading
 import time
 from pathlib import Path
 from urllib.parse import quote
+from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent
+load_dotenv(ROOT / ".env")
 SCRIPTS = ROOT / "scripts"
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -90,11 +92,14 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
     out.setdefault("AGE_DATABASE_DSN", "")
     out.setdefault("AGE_GRAPH_NAME", "rag_graph")
 
-    out["DOMAIN_SERVICE_URL"]     = "https://localhost:8000"
-    out["INGESTION_SERVICE_URL"]  = "https://localhost:8000"
-    out["RETRIEVAL_SERVICE_URL"]  = "https://localhost:8000"
-    out["GENERATION_SERVICE_URL"] = "https://localhost:8000"
-    out["EVALUATION_SERVICE_URL"] = "https://localhost:8000"
+    gateway_port = out.get("GATEWAY_PORT", "8000")
+    keycloak_gateway_port = out.get("KEYCLOAK_GATEWAY_PORT", "8443")
+
+    out["DOMAIN_SERVICE_URL"]     = f"https://localhost:{gateway_port}"
+    out["INGESTION_SERVICE_URL"]  = f"https://localhost:{gateway_port}"
+    out["RETRIEVAL_SERVICE_URL"]  = f"https://localhost:{gateway_port}"
+    out["GENERATION_SERVICE_URL"] = f"https://localhost:{gateway_port}"
+    out["EVALUATION_SERVICE_URL"] = f"https://localhost:{gateway_port}"
     out["OCR_SERVICE_URL"]        = "http://localhost:8006"
     out["UPLOAD_DIR"]             = str(ROOT / "data" / "uploads")
     out.setdefault("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -106,8 +111,8 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
 
     if use_keycloak:
         kc_port = out.get("KEYCLOAK_PORT", "8180")
-        out["KEYCLOAK_ISSUER"]      = f"https://localhost:8443/realms/rag-system"
-        out["KEYCLOAK_REALM_URL"]   = f"https://localhost:8443/realms/rag-system"
+        out["KEYCLOAK_ISSUER"]      = f"https://localhost:{keycloak_gateway_port}/realms/rag-system"
+        out["KEYCLOAK_REALM_URL"]   = f"https://localhost:{keycloak_gateway_port}/realms/rag-system"
         out["KEYCLOAK_PUBLIC_KEY"]  = ""
     else:
         from dev_auth import DEV_ISSUER, get_public_key_body  # noqa: PLC0415
@@ -142,13 +147,13 @@ def apply_local_env(env: dict[str, str], *, use_keycloak: bool, use_redis: bool)
 
 
 API_SERVICES = [
-    {"name": "monolith-service", "dir": ROOT / "services" / "monolith", "port": 8001, "app": "main:app"},
+    {"name": "monolith-service", "dir": ROOT / "services" / "monolith", "port": int(os.environ.get("DOMAIN_SERVICE_PORT", "8001")), "app": "main:app"},
 ]
 
 EVALUATION_SERVICE = {
     "name": "evaluation-service",
     "dir":  ROOT / "services" / "evaluation-service",
-    "port": 8005,
+    "port": int(os.environ.get("EVALUATION_SERVICE_PORT", "8005")),
     "app":  "main:app",
 }
 

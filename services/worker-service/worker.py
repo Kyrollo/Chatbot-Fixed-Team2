@@ -9,7 +9,11 @@ from celery import Celery
 from celery.signals import worker_process_init
 from dotenv import load_dotenv
 
-load_dotenv(override=False)
+root_env = Path(__file__).resolve().parents[2] / ".env"
+if root_env.exists():
+    load_dotenv(root_env, override=False)
+else:
+    load_dotenv(override=False)
 
 # ------------------------------------------------------------------
 # UTF-8 stdout/stderr — FIX for:

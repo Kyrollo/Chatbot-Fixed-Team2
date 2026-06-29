@@ -1,3 +1,19 @@
-node_modules
-dist
+node_modules/
+dist/
+dist-ssr/
+*.local
 .env
+.env.*
+!.env.example
+
+# TS Build Cache
+*.tsbuildinfo
+
+# IDE/Editors
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

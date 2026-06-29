@@ -1,12 +1,17 @@
 import os
 import sys
 from sqlalchemy import create_engine, text
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Ensure we can import from tasks
 sys.path.insert(0, os.getcwd())
 
-load_dotenv()
+root_env = Path(__file__).resolve().parents[2] / ".env"
+if root_env.exists():
+    load_dotenv(root_env)
+else:
+    load_dotenv()
 
 # Setup database connection
 _raw_url = os.getenv("SYNC_DATABASE_URL") or os.getenv("DATABASE_URL")
@@ -15,7 +20,8 @@ if not _raw_url:
     user = os.getenv("POSTGRES_USER", "postgres")
     password = quote(os.getenv("POSTGRES_PASSWORD", "postgres"), safe="")
     db = os.getenv("POSTGRES_DB", "domain_db")
-    _raw_url = f"postgresql://{user}:{password}@localhost:5434/{db}"
+    pg_port = os.getenv("POSTGRES_PORT", "5434")
+    _raw_url = f"postgresql://{user}:{password}@localhost:{pg_port}/{db}"
 DATABASE_URL = _raw_url.replace("postgresql+asyncpg://", "postgresql://")
 
 engine = create_engine(DATABASE_URL)
@@ -24,7 +30,9 @@ doc_id = "6112631c-9309-419d-ac41-d1c09e8c154b"
 domain_id = "11111111-1111-1111-1111-111111111111"
 user_id = "user"
 filename = "2025 Form W-4.pdf"
-file_path = r"D:\Personal\Fixed Solutions\Project Files\v5\data\uploads\6112631c-9309-419d-ac41-d1c09e8c154b\2025 Form W-4.pdf"
+
+ROOT = Path(__file__).resolve().parents[2]
+file_path = str(ROOT / "data" / "uploads" / "6112631c-9309-419d-ac41-d1c09e8c154b" / "2025 Form W-4.pdf")
 
 # 1. Insert document metadata into database
 with engine.begin() as conn:

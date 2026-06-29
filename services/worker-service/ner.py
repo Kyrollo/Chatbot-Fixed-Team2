@@ -119,7 +119,17 @@ def get_ner_model() -> Any:
                 print(f"Loading NER model: {resolved_model_name}...")
                 from gliner import GLiNER  # noqa: PLC0415 — see module docstring
 
-                _model = GLiNER.from_pretrained(resolved_model_name, local_files_only=True)
+                onnx_file = Path(resolved_model_name) / "model_quantized.onnx"
+                if onnx_file.exists():
+                    print("  Detected quantized ONNX model file. Loading with ONNX Runtime...")
+                    _model = GLiNER.from_pretrained(
+                        resolved_model_name,
+                        load_onnx_model=True,
+                        onnx_model_file="model_quantized.onnx",
+                        local_files_only=True
+                    )
+                else:
+                    _model = GLiNER.from_pretrained(resolved_model_name, local_files_only=True)
                 print("NER model loaded")
     return _model
 

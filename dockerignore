@@ -56,8 +56,10 @@ infra/
 # --- Misc project artifacts ---------------------------------------------------
 *.md
 !README.md
-run_guide.md
-wsl2_setup_v2.sh
-clear_database.py
-delete_chunks.py
-run_migration.py
+scripts/clear_database.py
+scripts/delete_chunks.py
+scripts/wsl2_setup_v2.sh
+scripts/download_onnx.py
+scripts/run_migration.py
+tools/caddy/
+tools/helm/

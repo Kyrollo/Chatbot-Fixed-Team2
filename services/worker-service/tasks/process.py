@@ -27,9 +27,14 @@ from graph_writer import write_to_graph
 
 from sqlalchemy import create_engine, text
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+root_env = Path(__file__).resolve().parents[3] / ".env"
+if root_env.exists():
+    load_dotenv(root_env)
+else:
+    load_dotenv()
 
 # Sync URL — prefer SYNC_DATABASE_URL, fall back to DATABASE_URL with asyncpg stripped
 _raw_url = os.getenv("SYNC_DATABASE_URL") or os.getenv("DATABASE_URL")

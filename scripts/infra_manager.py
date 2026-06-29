@@ -50,6 +50,22 @@ def get_keycloak_port() -> str:
     return "8180"
 
 
+def get_keycloak_gateway_port() -> str:
+    kc_g_port = os.getenv("KEYCLOAK_GATEWAY_PORT")
+    if kc_g_port:
+        return kc_g_port
+    dotenv_path = ROOT / ".env"
+    if dotenv_path.exists():
+        try:
+            for line in dotenv_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith("KEYCLOAK_GATEWAY_PORT="):
+                    return line.split("=", 1)[1].strip()
+        except Exception:
+            pass
+    return "8443"
+
+
 def get_redis_port() -> int:
     r_port = os.getenv("REDIS_PORT")
     if r_port:
@@ -254,6 +270,7 @@ def start_redis() -> subprocess.Popen:
 def start_keycloak() -> subprocess.Popen:
     home = ensure_keycloak_home()
     kc_port = get_keycloak_port()
+    kc_g_port = get_keycloak_gateway_port()
 
     if keycloak_ready():
         print(f"  Keycloak already running on http://localhost:{kc_port}")
@@ -272,7 +289,7 @@ def start_keycloak() -> subprocess.Popen:
             str(kc),
             "start-dev",
             f"--http-port={kc_port}",
-            "--hostname=https://localhost:8443",
+            f"--hostname=https://localhost:{kc_g_port}",
             "--proxy-headers=xforwarded",
             "--http-enabled=true",
             "--import-realm",
@@ -283,7 +300,7 @@ def start_keycloak() -> subprocess.Popen:
             str(kc),
             "start-dev",
             f"--http-port={kc_port}",
-            "--hostname=https://localhost:8443",
+            f"--hostname=https://localhost:{kc_g_port}",
             "--proxy-headers=xforwarded",
             "--http-enabled=true",
             "--import-realm",

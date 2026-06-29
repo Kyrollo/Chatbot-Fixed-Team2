@@ -2,7 +2,7 @@
 
 **Multi-user, multi-domain Retrieval-Augmented Generation (RAG) system** — Fixed Solutions AI Internship 2026.
 
-A complete backend + frontend stack for domain management, document ingestion, hybrid retrieval (Vector + BM25 + Graph), AI answer generation with citations, and automated evaluation. All workflows are exposed through HTTP APIs and a React chat UI.
+A complete backend + frontend stack for domain management, document ingestion, hybrid retrieval (Vector + BM25 + Graph), AI answer generation with citations, automated evaluation, TLS termination, and telemetry. All workflows are exposed through HTTP APIs, secure HTTPS proxies, and a React chat UI.
 
 ---
 
@@ -19,12 +19,14 @@ A complete backend + frontend stack for domain management, document ingestion, h
 9. [Authentication & RBAC](#9-authentication--rbac)
 10. [API Reference](#10-api-reference)
 11. [Prerequisites](#11-prerequisites)
-12. [Complete From-Scratch Setup & Run Guide](#12-complete-from-scratch-setup--run-guide)
+12. [Complete Setup, Security & Run Guide](#12-complete-setup-security--run-guide)
 13. [Environment Variables](#13-environment-variables)
 14. [Troubleshooting](#14-troubleshooting)
 15. [Directory Layout](#15-directory-layout)
 16. [Quick Reference Card](#16-quick-reference-card)
 17. [Sprint 3 — Hybrid Graph RAG (Apache AGE)](#17-sprint-3--hybrid-graph-rag-apache-age)
+18. [Monitoring — Prometheus + Grafana](#18-monitoring--prometheus--grafana)
+19. [Load Testing — Infrastructure Monitoring](#19-load-testing--infrastructure-monitoring)
 
 ---
 
@@ -38,6 +40,7 @@ A complete backend + frontend stack for domain management, document ingestion, h
 - Upload **documents** (PDF, DOCX, CSV, PNG, JPG) into those domains
 - Ask **natural language questions** and receive **AI-generated answers with citations** grounded in the uploaded documents
 - Evaluate answer quality automatically using an LLM-as-judge pipeline
+- Monitor the entire stack in real time with Prometheus, Grafana dashboards, and Alertmanager.
 
 ### What Is RAG? (Retrieval-Augmented Generation)
 
@@ -81,24 +84,6 @@ A user asks a question:
 8. Returns answer + citations (filename, page, chunk index, relevance score)
 9. **Caches response** in Redis and **logs in PostgreSQL** for audit
 
-### Key Capabilities
-
-| Capability | Description |
-|---|---|
-| Multi-domain isolation | Each domain has its own documents, members, configuration, and vector collection. Complete data separation. |
-| Role-based access (RBAC) | Three-layer security: Keycloak JWT tokens at the gateway + per-domain role checks in each service |
-| Hybrid retrieval (Sprint 1–2) | Dense vector search (semantic) + sparse BM25 (keywords) + cross-encoder reranking |
-| Graph RAG (Sprint 3) | Apache AGE knowledge graph for relationship queries: "Who manages Project Alpha?" |
-| AI answer generation | Groq (cloud, fast, free tier) or Ollama (local, offline). Per-domain LLM routing. |
-| Multi-format ingestion | PDF, DOCX, CSV, PNG, JPG — format-specific extractors + PaddleOCR/Surya for scanned content |
-| Async document processing | Celery + Redis background processing. Immediate `202 Accepted` + status polling. |
-| Intelligent caching | Redis caches retrieval results and generated answers. Repeat queries return instantly. |
-| Citation grounding | Every answer includes citations: filename, source type, page number, relevance score |
-| Multi-language OCR | PaddleOCR/Surya configurable via `OCR_LANG`/`OCR_LANGS` — supports Arabic, English, French, etc. |
-| Graceful degradation | Redis down → in-memory cache. Groq down → Ollama. Keycloak down → dev auth. AGE down → vector+BM25 only. |
-| Automated evaluation | LLM-as-judge scoring for faithfulness, relevance, and completeness with Celery Beat scheduling |
-| React chat UI | Full-featured web interface for login, domain management, document upload, and interactive Q&A |
-
 ---
 
 ## 2. System Architecture
@@ -108,12 +93,10 @@ A user asks a question:
 ```mermaid
 flowchart TD
     Client["Client (Browser / API)"]
+    Caddy["Caddy Proxy/Gateway :8000"]
     KC["Keycloak :8180"]
-    DS["domain-service :8001"]
-    IS["ingestion-service :8002"]
-    RS["retrieval-service :8003"]
-    GS["generation-service :8004"]
-    ES["evaluation-service :8005"]
+    KCGateway["Keycloak Caddy Proxy :8443"]
+    DS["monolith-service (FastAPI) :8001"]
     WS["worker-service (Celery)"]
     PG["PostgreSQL 17 :5434"]
     PGWSL["PostgreSQL 17 + AGE\n(WSL2) :5434"]
@@ -121,42 +104,26 @@ flowchart TD
     QD["Qdrant (embedded)"]
     LLM["Groq API / Ollama"]
 
-    Client -->|JWT auth| KC
-    Client --> DS
-    Client --> IS
-    Client --> GS
-    Client --> ES
+    Client -->|JWT auth| KCGateway
+    KCGateway --> KC
+    Client --> Caddy
+    Caddy --> DS
 
     DS --> PG
-    IS --> PG
-    IS --> RD
+    DS --> RD
     RD --> WS
     WS --> PG
     WS --> QD
     WS -->|Sprint 3: NER + Relations| PGWSL
 
-    GS --> RS
-    GS --> DS
-    GS --> LLM
-    GS --> RD
-    GS --> PG
-
-    RS --> QD
-    RS --> PG
-    RS --> RD
-    RS -->|Sprint 3: Graph Traversal| PGWSL
-
-    ES --> PG
-    ES --> LLM
-
     style KC fill:#f9a825,color:#000
+    style KCGateway fill:#f59e0b,color:#000
     style PG fill:#336791,color:#fff
     style PGWSL fill:#2c5f8a,color:#fff
     style RD fill:#dc382d,color:#fff
     style QD fill:#24b47e,color:#fff
     style LLM fill:#7c3aed,color:#fff
     style WS fill:#a78bfa,color:#000
-    style ES fill:#f59e0b,color:#000
 ```
 
 ### 2.2 Query Flow
@@ -164,38 +131,34 @@ flowchart TD
 ```mermaid
 flowchart TD
     Client["Client (Browser / API)"]
+    Caddy["Caddy Gateway :8000"]
     KC["Keycloak Auth Provider"]
-    GS["generation-service"]
+    GS["monolith-service :8001"]
     RD["Redis Cache"]
-    DS["domain-service"]
-    RS["retrieval-service"]
     QD["Qdrant (Vector DB)"]
     PG["PostgreSQL (BM25 DB)"]
     AGE["Apache AGE (Graph DB)"]
     LLM["LLM (Groq / Ollama)"]
 
-    Client -->|1. Submit RAG Query| GS
+    Client -->|1. Submit RAG Query| Caddy
+    Caddy --> GS
     GS -->|2. Validate JWT| KC
-    KC -->|3. Token OK| GS
-    GS -->|4. Check Cache| RD
+    GS -->|3. Check Cache| RD
 
-    RD -->|Cache Hit: Return Answer| Client
+    RD -->|Cache Hit: Return Answer| GS
+    GS -->|Return Answer| Client
 
     RD -->|Cache Miss| GS
-    GS -->|5. Fetch Config| DS
-    GS -->|6. Request Retrieval| RS
+    GS -->|4. Hybrid Retrieval| QD
+    GS -->|5. Sparse Search| PG
+    GS -->|6. Graph Traversal Sprint3| AGE
+    QD & PG & AGE -->|7. Fusion + Rerank| GS
 
-    RS -->|7a. Dense Search| QD
-    RS -->|7b. Sparse Search| PG
-    RS -->|7c. Graph Traversal Sprint3| AGE
-    QD & PG & AGE -->|8. Fusion + Rerank| RS
-    RS -->|9. Return Chunks| GS
-
-    GS -->|10. Build Prompt + Call| LLM
-    LLM -->|11. Generate Answer| GS
-    GS -->|12. Log Query| PG
-    GS -->|13. Cache Response| RD
-    GS -->|14. Return Final Answer| Client
+    GS -->|8. Build Prompt + Call| LLM
+    LLM -->|9. Generate Answer| GS
+    GS -->|10. Log Query| PG
+    GS -->|11. Cache Response| RD
+    GS -->|12. Return Final Answer| Client
 
     style KC fill:#f9a825,color:#000
     style RD fill:#dc382d,color:#fff
@@ -203,121 +166,6 @@ flowchart TD
     style QD fill:#24b47e,color:#fff
     style AGE fill:#2c5f8a,color:#fff
     style LLM fill:#7c3aed,color:#fff
-```
-
-**How it works:**
-1. Client submits HTTP `POST` with question + domain ID
-2. JWT token validated against Keycloak (or dev auth fallback)
-3. `generation-service` checks Redis — cache hit returns instantly
-4. On miss: fetches domain LLM config, calls `retrieval-service`
-5. `retrieval-service` runs parallel hybrid search: dense (Qdrant) + sparse (PostgreSQL BM25) + graph (Apache AGE, if relational query)
-6. Results fused via RRF and re-scored with cross-encoder reranking
-7. `generation-service` builds RAG prompt and calls the LLM
-8. Answer cached in Redis, logged in PostgreSQL, returned with full citation metadata
-
----
-
-### 2.3 Ingestion Pipeline
-
-```mermaid
-flowchart TD
-    Client["Client (Browser / API)"]
-    IS["ingestion-service"]
-    DS["domain-service"]
-    RD["Redis Queue"]
-    PG["PostgreSQL Database"]
-    WS["worker-service (Celery)"]
-    QD["Qdrant (Vector DB)"]
-    AGE["Apache AGE (Graph)"]
-
-    Client -->|1. POST /ingest| IS
-    IS -->|2. Validate File Type| IS
-    IS -->|3. Check Access| DS
-    IS -->|4. Create Pending Doc| PG
-    IS -->|5. Enqueue Job| RD
-    IS -->|6. Return 202 Accepted| Client
-
-    RD -->|7. Dequeue Job| WS
-    WS -->|8. Extract Text + OCR| WS
-    WS -->|9. Semantic Chunk + Embed| WS
-    WS -->|10. Index Vectors| QD
-    WS -->|11. Store Chunks + FTS| PG
-    WS -->|12. NER - Sprint 3| WS
-    WS -->|13. Relation Extraction - Sprint 3| AGE
-    WS -->|14. Set Status = done| PG
-
-    style DS fill:#60a5fa,color:#000
-    style RD fill:#dc382d,color:#fff
-    style PG fill:#336791,color:#fff
-    style QD fill:#24b47e,color:#fff
-    style WS fill:#a78bfa,color:#000
-    style AGE fill:#2c5f8a,color:#fff
-```
-
-**Steps 12–13 (Sprint 3)** are wrapped in `try/except` — a failure in NER or relation extraction logs a warning but does **not** fail the document. It still completes with `status=done` and is fully searchable through vector+BM25.
-
----
-
-### 2.4 Authentication Flow
-
-```mermaid
-flowchart TD
-    Client["Client (Browser / API)"]
-    KC["Keycloak Auth Provider"]
-    DS["domain-service (Dev Auth)"]
-    Service["Microservice (retrieve/ingest/etc)"]
-
-    subgraph KeycloakMode ["Option A: Keycloak Mode (Production)"]
-        Client -->|1. Authenticate| KC
-        KC -->|2. Return JWT access_token| Client
-        Client -->|3. Call Request + Bearer JWT| Service
-        Service -->|4. Validate JWT locally| Service
-    end
-
-    subgraph DevAuthMode ["Option B: Dev Auth Mode (Local Fallback)"]
-        Client -->|"1. POST /domains/auth/login {user_id}"| DS
-        DS -->|2. Mint & Return Dev JWT| Client
-        Client -->|3. Call Request + Bearer Dev JWT| Service
-    end
-
-    Service -->|Verify signature + extract claims| Service
-    Service -->|Check Domain Access| DS
-
-    style KC fill:#f9a825,color:#000
-    style DS fill:#60a5fa,color:#000
-    style Service fill:#a78bfa,color:#000
-```
-
-- **Option A (Keycloak):** Client exchanges credentials with Keycloak → gets JWT. Every service validates the token locally against Keycloak's public key.
-- **Option B (Dev Auth):** Client POSTs a `user_id` to `domain-service` → gets a locally-signed JWT. Auto-enabled when Keycloak is missing or `KEYCLOAK_PUBLIC_KEY` is blank.
-
----
-
-### 2.5 Evaluation Pipeline
-
-```mermaid
-flowchart TD
-    GS["generation-service"]
-    ES["evaluation-service :8005"]
-    CB["Celery Beat (Scheduler)"]
-    EW["Celery Evaluation Worker"]
-    LLM["LLM Judge (Groq)"]
-    PG["PostgreSQL (eval_results)"]
-    UI["React Dashboard"]
-
-    GS -->|Auto-submit on generation| ES
-    CB -->|Every 30 min: batch eval| EW
-    ES --> LLM
-    EW --> LLM
-    LLM -->|Score: faithfulness, relevance, completeness| ES
-    ES --> PG
-    EW --> PG
-    PG --> UI
-
-    style LLM fill:#7c3aed,color:#fff
-    style PG fill:#336791,color:#fff
-    style CB fill:#f59e0b,color:#000
-    style EW fill:#a78bfa,color:#000
 ```
 
 ---
@@ -325,44 +173,34 @@ flowchart TD
 ## 3. Architecture Decisions
 
 ### Decision 1: Single Root `.env`
-All services consume the same root `.env` loaded by `run_services.py`. One source of truth for local development. `pydantic-settings` tolerates extra variables with `extra="ignore"`. Per-service overrides (ports, names) are injected by the launcher.
+All services consume the same root `.env` loaded by `run_services.py`. One source of truth for local development.
 
 ### Decision 2: PostgreSQL 17 on Port 5434
-The project uses port **5434** (not the PostgreSQL default 5434) to avoid conflicts with older PostgreSQL versions that may be installed. This matches both the Windows PostgreSQL 17 instance and the WSL2 Apache AGE instance, which are kept in sync by the `AGE_DATABASE_DSN` env var.
+The project uses port **5434** to avoid conflicts with default PostgreSQL 5432 instances. This matches both the Windows PostgreSQL 17 instance and the WSL2 Apache AGE instance.
 
 ### Decision 3: Three-Signal Retrieval Pipeline
-`retrieval-service` implements: dense vector search (Qdrant) → sparse keyword search (PostgreSQL BM25) → Reciprocal Rank Fusion → cross-encoder reranking → Redis cache. Vector search catches semantic similarity; BM25 recovers exact keywords and acronyms; RRF keeps fusion robust; reranking improves final context quality.
+Retrieval implements: dense vector search (Qdrant) → sparse keyword search (PostgreSQL BM25) → Reciprocal Rank Fusion (RRF) → cross-encoder reranking → Redis cache.
 
-### Decision 4: Generation Service Stays Separate
-Answer generation is its own FastAPI service (not embedded in retrieval). Retrieval and generation have different dependencies and scaling behavior. Per-domain LLM routing, answer caching, query logging, and streaming belong in the generation boundary.
+### Decision 4: Unified FastAPI Monolith (Merged Microservices)
+To simplify deployment, reduce network overhead, and consolidate memory usage, all backend microservices (Domain, Ingestion, Retrieval, Generation, and Evaluation) are mounted as sub-apps into a single FastAPI Monolith listening on port **8001**.
 
 ### Decision 5: Groq First, Ollama Fallback
-Generation uses Groq when `GROQ_API_KEY` is configured, falls back to Ollama otherwise. Both expose an OpenAI-compatible API, so the routing layer stays small. Groq keeps interactive latency practical on dev hardware; Ollama remains available for offline usage.
+Generation uses Groq when `GROQ_API_KEY` is configured, falling back to Ollama otherwise. Both expose an OpenAI-compatible API.
 
 ### Decision 6: Worker Maintains Dual Indexes
-Worker writes chunks into both Qdrant (dense) and PostgreSQL `document_chunks` (BM25). Indexing once at ingestion time keeps query-time work small. Dense and sparse retrieval layers stay consistent with the same chunk payloads.
+Celery Worker writes chunks into both Qdrant (dense) and PostgreSQL `document_chunks` (BM25) during document ingestion.
 
 ### Decision 7: Redis Is Shared Across Queue and Cache
-Redis serves as Celery broker, Celery result backend, retrieval cache, and generation cache. When unavailable, the system gracefully degrades: in-memory TTL cache replaces Redis cache; sync subprocess replaces Celery async ingestion.
+Redis serves as Celery broker, Celery result backend, and caching engine.
 
 ### Decision 8: Apache AGE Instead of Neo4j (Sprint 3)
-Apache AGE is a PostgreSQL extension — same engine already used by the rest of this project. This reuses existing `domain_id` isolation patterns, avoids a separate DB server process, and keeps the same uptime story. The graph layer is **additive and failure-isolated** — a failure in NER or relation extraction does not fail document ingestion.
+Apache AGE is a PostgreSQL extension — same engine already used by the rest of this project. This reuses existing database instances and maintains strict domain isolation.
 
 ### Decision 9: OCR Is a PaddleOCR + Surya Ensemble
-Scanned pages and image uploads use an embedded OCR pipeline instead of Tesseract. PaddleOCR runs first (fast path); if its confidence score falls below the threshold, Surya (transformer-based, layout-aware) runs as a fallback. This keeps average latency low while improving accuracy on low-quality or mixed-language scans.
+PaddleOCR runs first (fast path); if its confidence score falls below `0.85`, Surya runs as a fallback.
 
 ### Decision 10: Scripts Directory Contains Shared Runtime Modules
-`scripts/` contains shared modules imported by services at runtime:
-
-| Script | Used By |
-|---|---|
-| `dev_auth.py` | `run_services.py`, gateway smoke test |
-| `infra_manager.py` | `run_services.py` |
-| `memory_cache.py` | `retrieval-service`, `generation-service` |
-| `network_bootstrap.py` | `run_services.py`, `retrieval-service` |
-| `qdrant_client_factory.py` | `worker-service`, `retrieval-service`, `delete_chunks.py` |
-
-`run_services.py` adds `scripts/` to `PYTHONPATH` so services can import shared modules.
+Auxiliary files (`clear_database.py`, `delete_chunks.py`, `download_onnx.py`, `wsl2_setup_v2.sh`) have been relocated to the `scripts/` folder to keep the root directory neat and tidy.
 
 ---
 
@@ -371,268 +209,43 @@ Scanned pages and image uploads use an embedded OCR pipeline instead of Tesserac
 | Component | Technology | Version | Purpose |
 |---|---|---|---|
 | Language | Python | 3.11–3.13 | Backend runtime |
-| Web framework | FastAPI + Uvicorn | 0.115.6 / 0.34.0 | All microservices |
-| Frontend | React + Vite + TypeScript + Tailwind | — | Chat UI at `rag-ui/` |
+| Web framework | FastAPI + Uvicorn | 0.115.6 / 0.34.0 | Monolith service |
+| Frontend | React + Vite + TS | — | Chat UI at `rag-ui/` |
 | Database | PostgreSQL | **17** (port 5434) | Domains, documents, chunks, query logs |
-| Graph DB | PostgreSQL 17 + Apache AGE | AGE v1.6.0-rc0 | Knowledge graph (Sprint 3, WSL2) |
+| Graph DB | PostgreSQL 17 + AGE | AGE v1.6.0-rc0 | Knowledge graph (Sprint 3, WSL2) |
 | Vector DB | Qdrant | 1.12.1 | Embedded dense vector search |
-| Cache / Queue | Redis | 5.x | Celery broker + retrieval/answer cache |
-| Task queue | Celery | 5.4.0 | Async document ingestion + evaluation |
-| Task scheduler | Celery Beat | 5.4.0 | Periodic batch evaluation (every 30 min) |
+| Cache / Queue | Redis | 5.x | Celery broker + caching |
+| Task queue | Celery | 5.4.0 | Ingestion & batch evaluation |
 | Auth | Keycloak | 26.5.0 | OAuth2/OIDC, JWT tokens |
-| Embeddings | `intfloat/multilingual-e5-small` | — | 384-dim multilingual embeddings |
-| Reranker | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | — | Cross-encoder reranking |
-| NER (Sprint 3) | `urchade/gliner_multi-v2.1` | — | Zero-shot multilingual entity extraction |
-| Cloud LLM | Groq | — | `llama-3.3-70b-versatile` — generation + eval |
+| Proxy / TLS | Caddy | 2.x | HTTPS gateway & TLS termination |
+| Embeddings | `multilingual-e5-small` | — | 384-dim multilingual embeddings |
+| Reranker | `mmarco-mMiniLMv2` | — | Cross-encoder reranking |
+| NER (Sprint 3) | `gliner_multi-v2.1` | — | Zero-shot entity extraction |
 | Local LLM | Ollama | — | `llama3.2:3b` (offline fallback) |
-| PDF extraction | PyMuPDF | — | Native text extraction for digital PDFs |
-| OCR (fast path) | PaddleOCR | ≥3.7.0 | Primary OCR for scanned pages and images |
-| OCR (fallback) | Surya | — | Layout-aware transformer OCR |
-| DOCX extraction | python-docx | 1.1.2 | Word document text extraction |
-| CSV extraction | pandas | 2.2.3 | Tabular data text extraction |
-| ML runtime | PyTorch CPU | 2.6.0+ | Embedding, reranker, Surya inference |
+| OCR | PaddleOCR + Surya | — | Document layout-aware text extraction |
 
 ---
 
 ## 5. Services Reference
 
-### Service Map and Ports
+### Service Port Map
 
-| Component | Port(s) | Type | Purpose |
-|---|---:|---|---|
-| Keycloak | 8180 | Identity provider | Login, JWT token issuance |
-| PostgreSQL 17 (Windows) | 5434 | Database | Domains, documents, chunks, query logs |
-| PostgreSQL 17 + AGE (WSL2) | 5434 | Graph Database | Knowledge graph (Sprint 3) |
-| Redis | 6379 | Cache + queue | Celery broker, retrieval cache, answer cache |
-| Qdrant | — | Vector database | Dense embedding search (embedded, no server) |
-| domain-service | 8001 | FastAPI | Domain CRUD, members, config, RBAC |
-| ingestion-service | 8002 | FastAPI | PDF upload, job enqueue, status polling |
-| worker-service | — | Celery worker | Extract (incl. OCR) → chunk → embed → index → NER → relations |
-| retrieval-service | 8003 | FastAPI | Hybrid search pipeline (vector + BM25 + graph) |
-| generation-service | 8004 | FastAPI | RAG orchestration and LLM answers |
-| evaluation-service | 8005 | FastAPI | LLM-as-judge scoring (optional) |
-
-### Deep Dive: What Each Service Does
-
-#### 🟦 domain-service (Port 8001) — The Brain of the System
-
-**What it does:** Manages all knowledge domains, user memberships, and domain-level configuration. Central authority that other services call to verify permissions.
-
-**How it works internally:**
-- **Domain CRUD:** Create, list, archive knowledge domains. Each domain is an isolated workspace with its own documents, members, and RAG settings.
-- **RBAC enforcement:** Other services call `domain-service /internal/check-access` to verify user roles.
-- **Configuration management:** Each domain has a `domain_configs` record controlling: LLM route (`api`=Groq, `local`=Ollama), chunk size, chunk overlap, confidence threshold.
-- **Dev auth:** In dev mode, provides `/domains/auth/login` endpoint where you POST a `user_id` and get a locally-signed JWT.
-- **Database:** SQLAlchemy async ORM with PostgreSQL. Tables auto-created on startup.
-
-**Key files:** `main.py`, `routes/`, `models/`, `auth/`
-
-#### 🟧 ingestion-service (Port 8002) — The Document Receiver
-
-**What it does:** Receives uploads, validates access, saves files to disk, and enqueues background processing jobs.
-
-**How it works internally:**
-- **Upload handling:** Accepts multipart file uploads (max 50 MB). Saves to `data/uploads/{document_id}/{filename}`.
-- **Access check:** Verifies `contributor` or higher role via `domain-service /internal/check-access`.
-- **Job enqueue:** Creates `documents` record (status=`pending`) + pushes Celery task to Redis. Returns `202 Accepted` immediately.
-- **Status polling:** `GET /ingest/{document_id}` — returns `pending` → `processing` → `done` or `failed`.
-- **Sync fallback:** If Redis is not running, processes document synchronously in a subprocess.
-
-**Key files:** `main.py`, `routes/ingest.py`
-
-#### 🟪 worker-service (Celery Worker) — The Document Processor
-
-**What it does:** Runs as a Celery worker. Picks up ingestion jobs from Redis and does heavy lifting: text extraction, chunking, embedding, indexing, and Sprint 3 graph extraction.
-
-**6-step pipeline** (in `tasks/process.py`):
-1. **Extract text:** PyMuPDF for digital PDFs, python-docx for DOCX, pandas for CSV. Scanned PDFs and images → **OCR pipeline** (PaddleOCR + Surya fallback)
-2. **Semantic chunk:** ~512-char chunks with 64-char overlap
-3. **Embed:** `intfloat/multilingual-e5-small` (384-dim), each chunk prefixed with `passage:`
-4. **Index:** Vectors → Qdrant; chunks → PostgreSQL `document_chunks` with `TSVECTOR`
-5. **NER (Sprint 3):** GLiNER multilingual extracts entities (Person, Project, Department, Policy, Role, Location, Skill) from each chunk
-6. **Relation extraction (Sprint 3):** Groq LLM extracts typed relations (MANAGES, BELONGS_TO, etc.) in batches of 20 chunks → writes to Apache AGE graph
-
-> **Important:** Steps 5–6 are wrapped in `try/except`. Failure here logs a warning but does **not** fail the document — it completes with `status=done` and remains searchable.
-
-> **On Windows:** Celery runs with `--pool=solo` (no fork support). One job at a time, but reliable.
-
-**Key files:** `tasks/extract.py`, `tasks/process.py`, `celery_app.py`, `ner.py`, `relation_extraction.py`, `ontology.py`, `tasks/ocr-service/ocr_service/`
-
-#### 🟩 retrieval-service (Port 8003) — The Search Engine
-
-**What it does:** Implements the 6-stage hybrid retrieval pipeline. Given a query and domain ID, finds the most relevant document chunks.
-
-**6-stage pipeline:**
-1. **Query embedding:** E5 model with `query:` prefix (matches `passage:` prefix from indexing)
-2. **Dense vector search (Qdrant):** Cosine similarity — finds semantically similar chunks
-3. **Sparse keyword search (PostgreSQL BM25):** Full-text search on `search_vec` TSVECTOR — finds exact keyword matches
-4. **Reciprocal Rank Fusion (RRF):** Merges dense + sparse results: `score = Σ 1/(k + rank_i)` with k=60
-5. **Cross-encoder reranking:** `mmarco-mMiniLMv2` re-scores top candidates (sees query AND chunk together — more accurate than bi-encoders)
-6. **Redis caching:** Final results cached with TTL (default 1 hour)
-
-**Sprint 3 addition:** If `AGE_DATABASE_DSN` is configured and the query contains relational keywords, the `RetrievalRouter` enables graph traversal (1-hop Cypher match on the knowledge graph). Graph-derived chunks are assigned a score of `0.95` and fused with vector+BM25 results.
-
-**Key files:** `services/qdrant_search.py`, `services/bm25_search.py`, `services/reranker.py`, `services/hybrid_retrieval.py`, `services/graph_retriever.py`
-
-#### 🟥 generation-service (Port 8004) — The AI Answer Writer
-
-**What it does:** Orchestrates the full RAG pipeline: gets domain config, calls retrieval, builds prompt, calls LLM, returns answer with citations.
-
-**How it works:**
-1. **Cache check:** Redis lookup for (query, domain_id) pair
-2. **Domain config:** LLM route, confidence threshold
-3. **Retrieval:** Calls `retrieval-service` → ranked chunks with scores
-4. **Confidence filtering:** Drops chunks below `confidence_threshold`
-5. **Prompt construction:** System prompt + numbered evidence paragraphs
-6. **LLM call:** `api` → Groq cloud (`llama-3.3-70b-versatile`); `local` → Ollama (`llama3.2:3b`)
-7. **Response assembly:** Answer text + citations + model used + cache status + timing
-8. **Cache + log:** Redis answer cache + PostgreSQL `rag_query_logs`
-
-**Key files:** `main.py`, `routes/generate.py`, `services/llm_client.py`
-
-#### 🟨 evaluation-service (Port 8005, Optional) — The Quality Judge
-
-**What it does:** Uses an LLM to score RAG answer quality. Scores answers on relevance, faithfulness, and completeness. Supports live (per-query) and batch (Celery Beat, every 30 minutes) evaluation modes.
-
-**When to use:** Started with `python run_services.py --evaluation`. Set `EVALUATE_ON_GENERATION=true` to auto-evaluate every generated answer.
-
-**Key files:** `main.py`, `routes/evaluate.py`, `celery_app.py` (Beat schedule)
-
-### Infrastructure Services
-
-#### Keycloak (Port 8180) — Identity & Access Management
-OAuth2/OpenID Connect identity provider. Handles user login, issues JWT access tokens. Auto-downloaded on first run by `run_services.py` (~150 MB). Requires Java 17+.
-
-#### PostgreSQL 17 (Port 5434) — Relational Database
-Stores all structured data. Used by all services. **Must be version 17** — older versions (14, 15, 16) must be stopped. See `run_guide.md` for stopping instructions.
-
-#### Redis (Port 6379) — Cache & Message Queue
-Serves four purposes: Celery broker, Celery result backend, retrieval cache, answer cache. Auto-downloaded portable Redis on first run. Graceful degradation to in-memory cache if unavailable.
-
-#### Qdrant (Embedded) — Vector Database
-No separate server. The `qdrant-client` library opens `data/qdrant/` directly. One Qdrant collection per domain, 384-dimensional vectors.
-
-### What `run_services.py` Does (in order)
-
-1. **Loads `.env`** — sets all environment variables
-2. **Downloads + starts Redis** (first run) — portable Redis to `tools/redis/`
-3. **Downloads + starts Keycloak** (first run) — to `tools/keycloak/`
-4. **Graceful degradation:** If Java missing → dev JWT mock; If Redis fails → in-memory cache
-5. **Purges stale Celery tasks** — removes leftover jobs
-6. **Sets ML environment vars:** `HF_HUB_OFFLINE=1`, `KMP_DUPLICATE_LIB_OK=TRUE`, `CUDA_VISIBLE_DEVICES=""`, etc.
-7. **Starts services in order:** domain-service (8001) → ingestion-service (8002) → retrieval-service (8003) → generation-service (8004) → [worker-service if `--worker`] → [evaluation-service (8005) if `--evaluation`]
-8. **Monitors all processes** — logs crashes and keeps running
-
-### Launcher Flags
-
-```powershell
-python run_services.py                       # APIs + infra only (no worker)
-python run_services.py --worker              # also start Celery ingestion worker (required for OCR)
-python run_services.py --evaluation          # also start evaluation-service on :8005
-python run_services.py --worker --evaluation # full stack
-python run_services.py --no-reload           # disable Uvicorn reload (save memory)
-python run_services.py --skip-infra          # skip Redis/Keycloak (if already running externally)
-```
-
-> If Redis is not running: uses in-memory cache and sync PDF ingestion.
-> If Redis is running + `--worker`: starts Celery worker for async ingestion; OCR (PaddleOCR/Surya) available.
+| Component | Port(s) | Type | Route / URL | Purpose |
+|---|---:|---|---|---|
+| **Caddy Gateway** | `8000` | HTTPS Proxy | `https://localhost:8000` | Entry point for backend API traffic |
+| **FastAPI Monolith** | `8001` | HTTP API | `http://localhost:8001` | Direct backend containing all endpoints |
+| **Keycloak Gateway** | `8443` | HTTPS Proxy | `https://localhost:8443` | Secure OIDC Auth entry point |
+| **Keycloak (Auth)** | `8180` | OIDC Server | `http://localhost:8180` | Raw identity provider server |
+| **PostgreSQL 17** | `5434` | Relational DB | `localhost:5434` | Database storage (domains, chunks, graphs) |
+| **Redis** | `6379` | Cache/Queue | `localhost:6379` | Celery broker, cache engine |
+| **React UI (Caddy)** | `3001` | HTTPS server | `https://localhost:3001` | Compiled production frontend |
+| **Vite Dev Server** | `5173` | HTTP server | `http://localhost:5173` | Local frontend dev server |
+| **Prometheus** | `9092` | Metrics | `http://localhost:9092` | Telemetry database |
+| **Grafana** | `3000` | Dashboards | `http://localhost:3000` | Telemetry charts & dashboards |
 
 ---
 
 ## 6. Database Schema
-
-### Entity Relationship Diagram
-
-```mermaid
-erDiagram
-    users {
-        varchar id PK
-        varchar name
-        varchar role
-    }
-
-    domains {
-        uuid id PK
-        varchar name UK
-        text description
-        varchar status
-        varchar created_by
-        timestamp created_at
-        timestamp updated_at
-    }
-
-    domain_configs {
-        uuid id PK
-        uuid domain_id FK
-        varchar llm_route
-        int chunk_size
-        int chunk_overlap
-        float confidence_threshold
-        json extra_settings
-        timestamp updated_at
-    }
-
-    domain_roles {
-        uuid id PK
-        uuid domain_id FK
-        varchar user_id
-        varchar role
-        varchar assigned_by
-        timestamp assigned_at
-    }
-
-    documents {
-        varchar id PK
-        varchar domain_id
-        varchar user_id
-        varchar filename
-        varchar file_path
-        varchar status
-        text error_msg
-        timestamp created_at
-    }
-
-    document_chunks {
-        text id PK
-        text document_id
-        text domain_id
-        int page_num
-        int chunk_index
-        text content
-        text source_type
-        tsvector search_vec
-        timestamp created_at
-    }
-
-    rag_query_logs {
-        bigint id PK
-        text domain_id
-        text user_id
-        text query
-        text answer
-        text llm_route
-        text model
-        bool cache_hit
-        timestamp created_at
-    }
-
-    eval_results {
-        bigint id PK
-        text domain_id
-        text query_log_id FK
-        float faithfulness_score
-        float relevance_score
-        float completeness_score
-        text judge_model
-        timestamp created_at
-    }
-
-    domains ||--|| domain_configs : "has-config"
-    domains ||--o{ domain_roles : "has-members"
-    domains ||--o{ documents : "contains"
-    documents ||--o{ document_chunks : "split-into"
-    rag_query_logs ||--o{ eval_results : "evaluated-by"
-```
 
 ### Table Details
 
@@ -647,18 +260,11 @@ erDiagram
 | `rag_query_logs` | Query audit trail | `query`, `answer`, `llm_route`, `model`, `cache_hit` |
 | `eval_results` | LLM-as-judge scores | `faithfulness_score`, `relevance_score`, `completeness_score` |
 
-**Apache AGE Graph Tables (WSL2, Sprint 3):**
-
-| Label | Type | Purpose |
-|---|---|---|
-| Person, Project, Department, Policy, Role, Location, Skill | Vertex (7 types) | Entity nodes extracted from document chunks |
-| MANAGES, BELONGS_TO, REPORTS_TO, OWNS, HAS_ROLE, WORKS_ON, HAS_SKILL, BASED_AT | Edge (8 types) | Typed relationships between entities |
-
 ---
 
 ## 7. Retrieval Pipeline
 
-The retrieval service implements a 6-stage hybrid pipeline:
+The retrieval pipeline processes incoming queries via three distinct tracks before rank fusion and cross-encoder reranking:
 
 ```mermaid
 flowchart LR
@@ -689,47 +295,18 @@ flowchart LR
     style C fill:#dc382d,color:#fff
 ```
 
-| Stage | Model / Method | Purpose |
-|---|---|---|
-| 1. Embedding | `intfloat/multilingual-e5-small` (384d) | Encode query with `query:` prefix |
-| 2. Dense search | Qdrant cosine similarity | Semantic similarity matching |
-| 3. Sparse search | PostgreSQL `search_vec` FTS | Exact keywords and acronyms |
-| 4. Graph traversal (Sprint 3) | Apache AGE Cypher (1-hop) | Relational entity queries |
-| 5. Fusion | Reciprocal Rank Fusion (k=60) | Merge all result lists fairly |
-| 6. Reranking | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | Re-score top candidates |
-| 7. Cache | Redis TTL cache | Skip computation for repeated queries |
-
-### Graph Routing Decision (Sprint 3)
-
-```mermaid
-flowchart TD
-    Q["Incoming Query"]
-    RT["RetrievalRouter"]
-    KW{"Contains relational\nkeywords?\n(manages, who is, يدير, مدير...)"}
-    AGE_EN{"AGE_DATABASE_DSN\nconfigured?"}
-    GR["Enable Graph Retrieval"]
-    VB["Vector + BM25 only"]
-    FUSE["Score Fusion\nGraph chunks score=0.95"]
-
-    Q --> RT --> KW
-    KW -->|Yes| AGE_EN
-    KW -->|No| VB
-    AGE_EN -->|Yes| GR
-    AGE_EN -->|No| VB
-    GR --> FUSE
-    VB --> FUSE
-
-    style GR fill:#2c5f8a,color:#fff
-    style FUSE fill:#f59e0b,color:#000
-```
+1. **Embedding**: Model `intfloat/multilingual-e5-small` converts queries with a `query:` prefix.
+2. **Dense Vector Search**: Qdrant executes cosine similarity to capture semantic similarity.
+3. **Sparse Keyword Search**: PostgreSQL full-text search (`TSVECTOR`) recovers exact keyword matches.
+4. **Graph Traversal (Sprint 3)**: Apache AGE 1-hop traversal resolves relational entities when triggered.
+5. **Fusion**: Reciprocal Rank Fusion (RRF, `k=60`) merges list candidates.
+6. **Reranking**: `mmarco-mMiniLMv2-L12-H384-v1` re-scores top candidates before returning.
 
 ---
 
 ## 8. OCR Pipeline
 
-Scanned PDF pages and standalone image uploads (PNG/JPG/JPEG) are routed through an embedded OCR pipeline before chunking. Lives under `services/worker-service/tasks/ocr-service/ocr_service/`.
-
-### 8.1 Routing Overview
+Scanned PDF pages and standalone image uploads (PNG/JPG/JPEG) are routed through a high-performance preprocessing and OCR ensemble:
 
 ```mermaid
 flowchart TD
@@ -740,12 +317,12 @@ flowchart TD
     NATIVE{"Native text layer?\n(PyMuPDF)"}
     DIRECT["Use native text directly"]
     PRE["Preprocessing\nDenoise -> Deskew -> Adaptive Resize"]
-    PADDLE["PaddleOCR\n(fast path, multi-language)"]
-    PSCORE{"Paddle score >= threshold?\n(default 0.85)"}
+    PADDLE["PaddleOCR\n(fast path)"]
+    PSCORE{"Paddle score >= 0.85?"}
     EXIT["Early exit: use Paddle result"]
     SURYA["Surya OCR\n(transformer fallback)"]
     PICK["Pick higher-scoring result"]
-    OUT["{page, text, model_used,\nconfidence_score, ...}"]
+    OUT["{page, text, confidence_score}"]
     CHUNK["chunk.py -> embed.py -> index.py"]
 
     F --> EXT
@@ -768,629 +345,369 @@ flowchart TD
 
     style PADDLE fill:#24b47e,color:#fff
     style SURYA fill:#7c3aed,color:#fff
-    style PRE fill:#f59e0b,color:#000
 ```
 
-### 8.2 Stages
-
-| Stage | Component | What it does |
-|---|---|---|
-| 1. Format routing | `tasks/extract.py` | `.docx` → python-docx, `.csv` → pandas, `.pdf`/`.png`/`.jpg`/`.jpeg` → native text check |
-| 2. Native text check | PyMuPDF (`fitz`) | Each PDF page's text layer is checked. If text exists, used directly — no OCR |
-| 3. Preprocessing | `ocr_service/preprocessing/image_processor.py` | Denoise (`fastNlMeansDenoisingColored`), deskew (Hough line transform, ±15°), adaptive resize |
-| 4. Fast OCR path | `ocr_service/engines/paddle_engine.py` | PaddleOCR — loaded once per language as singleton |
-| 5. Confidence scoring | `ocr_service/scoring/ocr_scorer.py` | Paddle score = `0.7 × avg_confidence + 0.3 × valid_word_ratio` |
-| 6. Routing decision | `ocr_service/routing/ocr_router.py` | If Paddle score ≥ `OCR_CONFIDENCE_THRESHOLD` → return; else run Surya |
-| 7. Fallback OCR | `ocr_service/engines/surya_engine.py` | Layout-aware transformer OCR — used only when PaddleOCR is below threshold |
-| 8. Output | `ocr_service/pipeline.py` | Returns `{page, text, model_used, confidence_score, processing_time_ms}` per page |
-
-### 8.3 Multi-Language Support
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `OCR_LANG` | Single-language mode — PaddleOCR loads one language model | `en` |
-| `OCR_LANGS` | Comma-separated (e.g. `ar,en`) — runs once per language, keeps highest-confidence result | unset (single-language mode) |
-
-`OCR_LANGS` takes precedence when set. Each language's PaddleOCR pipeline is loaded once and cached as a singleton.
-
-### 8.4 Platform Notes (Windows CPU)
-
-PaddleOCR on Windows CPU requires:
-- **`enable_mkldnn=False`** — avoids a oneDNN/PIR crash on first `predict()` call
-- **`text_detection_model_name="PP-OCRv5_mobile_det"`** — avoids native access violation (0xC0000005) with mkldnn disabled
-- **Microsoft Visual C++ Redistributable (latest x64)** — required for `libpaddle.pyd` and `shm.dll` to load
-
-Already applied in `ocr_service/engines/paddle_engine.py`.
+* **Preprocessing**: Image processor performs bilateral denoising, Hough line deskewing, and adaptive resizing.
+* **PaddleOCR**: Loaded as a cached singleton per language (`en`, `ar`).
+* **Surya Fallback**: Transformer-based OCR triggered if PaddleOCR confidence falls below `0.85`.
 
 ---
 
 ## 9. Authentication & RBAC
 
-### Two Layers of Security
+The system employs a two-layer security approach:
+1. **JWT Signature Layer**: Every API call requires a Bearer token.
+2. **Service Access Checks**: Internal service-to-service calls use the shared `INTERNAL_API_KEY` header.
 
-1. **JWT layer:** Every API call requires a valid Bearer JWT token. Services decode the token locally to extract `user_id` and roles.
-2. **Service layer (FastAPI):** Domain-specific operations additionally call `domain-service /internal/check-access` using the shared `INTERNAL_API_KEY`.
+### Realm Roles & Permissions
 
-### Realm Roles
+| Role | Meaning | Action Permissions |
+|---|---|---|
+| `system_admin` | Platform-wide administrator | Create domains, update global settings, bypass RBAC checks |
+| `domain_admin` | Domain-specific manager | Manage domain members and domain configs |
+| `contributor` | Editor/Writer | Upload documents, run manual ingestion, query domains |
+| `reader` | Viewer/Consumer | Query domain documents and view citations |
 
-| Role | Meaning |
-|---|---|
-| `system_admin` | Platform-wide administrator; can create domains and bypass per-domain checks |
-| `domain_admin` | Manages one domain's members and configuration |
-| `contributor` | Can upload documents to a domain |
-| `reader` | Can query/read within a domain |
-
-### Permission Matrix
-
-| Action | Required Role |
-|---|---|
-| Create a domain | `system_admin` |
-| Upload a PDF | `contributor`, `domain_admin`, or `system_admin` on that domain |
-| Query / generate answer | `reader` or higher on that domain |
-| Manage domain members | `domain_admin` or `system_admin` |
-| Update domain config | `domain_admin` or `system_admin` |
-
-### RBAC Verification Matrix
-
-| User | Operation | Expected | Status |
-|---|---|---|---|
-| `admin` (system_admin) | Create domain | 201 Created | ✅ Allowed |
-| `admin` (system_admin) | Change config | 200 OK | ✅ Allowed (bypasses check) |
-| `manager` (domain_admin) | Create domain | 403 Forbidden | ❌ Denied |
-| `manager` (domain_admin) | Change config | 200 OK | ✅ Allowed on assigned domain |
-| `contributor` | Upload PDF | 202 Accepted | ✅ Allowed on assigned domain |
-| `contributor` | Change config | 403 Forbidden | ❌ Denied |
-| `viewer` (reader) | Query domain | 200 OK | ✅ Allowed on assigned domain |
-| `viewer` (reader) | Upload PDF | 403 Forbidden | ❌ Denied |
-| `unauth` | Any operation | 401 Unauthorized | ❌ Denied |
-
-### Internal Service-to-Service Calls
-
-Services communicate internally using a shared secret header:
-```
-X-Internal-Key: <value of INTERNAL_API_KEY in .env>
-```
-
-### Dev Auth Fallback
-
-When Keycloak is not running, `run_services.py` automatically uses `scripts/dev_auth.py` for local JWT auth with self-signed keys. In the React UI, sign in by typing the User ID directly into the Quick Access panel.
+### Dev Auth Mode (Local Fallback)
+If Keycloak is not running, `run_services.py` spawns local mock JWT authentication. Users can authenticate by entering pre-configured User IDs: `admin`, `manager`, `contributor`, `viewer`.
 
 ---
 
 ## 10. API Reference
 
-All requests require: `Authorization: Bearer <JWT_ACCESS_TOKEN>`
+All backend endpoints are integrated into the FastAPI monolith running at port `8001` (exposed externally on HTTPS port `8000` via Caddy).
 
-### 10.1 domain-service (port 8001)
-
-| Method | Path | Who | Description |
-|---|---|---|---|
-| POST | `/domains/auth/login` | Public | Dev auth — login by user_id |
-| POST | `/domains` | `system_admin` | Create a knowledge domain |
-| GET | `/domains` | Authenticated | List domains (filtered by role) |
-| POST | `/domains/{id}/members` | `domain_admin`+ | Assign user role in domain |
-| GET | `/domains/{id}/config` | Members | Get domain RAG config |
-| PATCH | `/domains/{id}/config` | `domain_admin`+ | Update domain RAG config |
-| POST | `/internal/check-access` | Internal only | Verify user access (X-Internal-Key) |
-| GET | `/health` | Public | Health check |
-
-### 10.2 ingestion-service (port 8002)
-
-| Method | Path | Who | Description |
-|---|---|---|---|
-| POST | `/ingest` | `contributor`+ | Upload document (multipart: `file` + `domain_id`). Supported: PDF, DOCX, CSV, PNG, JPG, JPEG |
-| GET | `/ingest/{document_id}` | Authenticated | Poll ingestion status |
-| GET | `/health` | Public | Health check |
-
-**Ingestion statuses:** `pending` → `processing` → `done` or `failed`
-
-### 10.3 retrieval-service (port 8003)
-
-| Method | Path | Who | Description |
-|---|---|---|---|
-| POST | `/api/v1/retrieve` | `reader`+ (RBAC enforced) | Hybrid retrieval (query + domain_id). |
-| GET | `/health` | Public | Health check |
-
-### 10.4 generation-service (port 8004)
-
-| Method | Path | Who | Description |
-|---|---|---|---|
-| POST | `/generate/query` | `reader`+ | RAG query with answer + citations |
-| GET | `/generate/health` | Public | Health check |
-
-**Query payload:**
-```json
-{
-  "query": "What is the refund policy?",
-  "domain_id": "UUID",
-  "top_k_retrieve": 10,
-  "top_k_rerank": 5
-}
-```
-
-**Response:**
-```json
-{
-  "answer": "The refund policy allows returns within 30 days...",
-  "citations": [
-    {
-      "chunk_id": "...",
-      "document_id": "...",
-      "filename": "policy.pdf",
-      "source_type": "pdf",
-      "chunk_index": 2,
-      "page": 3,
-      "score": 0.87,
-      "text": "...",
-      "retrieval_method": "vector"
-    }
-  ],
-  "cache_hit": false,
-  "llm_route": "api",
-  "model": "llama-3.3-70b-versatile"
-}
-```
-
-### 10.5 evaluation-service (port 8005, optional)
-
-| Method | Path | Who | Description |
-|---|---|---|---|
-| POST | `/evaluate` | Authenticated | LLM-as-judge scoring |
-| GET | `/evaluate/health` | Public | Health check |
-
-### Swagger UI (Interactive API Docs)
-
-| Service | URL |
-|---|---|
-| domain-service | http://localhost:8001/docs |
-| ingestion-service | http://localhost:8002/docs |
-| retrieval-service | http://localhost:8003/docs |
-| generation-service | http://localhost:8004/docs |
-| evaluation-service | http://localhost:8005/docs |
+* **Swagger Interactive Docs**: [http://localhost:8001/docs](http://localhost:8001/docs)
+* **Key endpoints**:
+  * `POST /domains/auth/login` — Mint JWT token (Dev Auth fallback).
+  * `POST /domains` — Create a knowledge domain (Admin only).
+  * `GET /domains` — List accessible domains.
+  * `POST /ingest` — Upload PDF/DOCX/CSV/Image (`file` + `domain_id`).
+  * `GET /ingest/{id}` — Poll document status (`pending` -> `processing` -> `done`/`failed`).
+  * `POST /generate/query` — RAG question answering.
+  * `POST /evaluate` — Trigger LLM judge evaluation.
 
 ---
 
 ## 11. Prerequisites
 
-### Required
+### Required System Software
+* **Python**: `3.11` to `3.13`. Ensure it is added to your environment `PATH`.
+* **PostgreSQL**: Version **17**. Stop any running services on 5432/5433. Database port must be set to `5434`.
+* **Java**: JDK `17` or newer (required for Keycloak OIDC server).
+* **Microsoft Visual C++ Redistributable (x64)**: Required for PaddleOCR/PyTorch DLL bindings.
+* **Groq API Key**: Obtain a free-tier key from [console.groq.com](https://console.groq.com).
 
-| Requirement | Version | Notes |
-|---|---|---|
-| **Python** | 3.11–3.13 | [Download](https://www.python.org/downloads/). Check "Add Python to PATH". |
-| **PostgreSQL** | **17** | [Download](https://www.postgresql.org/download/windows/). Use port **5434**. Stop older versions. |
-| **Java** | 17+ | [Adoptium Temurin](https://adoptium.net/). Required for Keycloak. |
-| **Groq API key** | Free tier | [Get one](https://console.groq.com). Primary LLM provider. |
-| **Microsoft Visual C++ Redistributable** | Latest x64 | [Download](https://aka.ms/vs/17/release/vc_redist.x64.exe). Required for PaddleOCR/PyTorch on Windows. |
-| **RAM** | 8 GB min, 16 GB recommended | Embedding, reranking, PaddleOCR, and Surya models load into memory |
-| **Disk** | ~10 GB free | ML model caches (incl. OCR models) + infra downloads |
-
-### Auto-Downloaded (by `run_services.py`)
-
-| Component | Port | Notes |
-|---|---|---|
-| **Redis** | 6379 | Portable Redis for Windows, downloaded to `tools/redis/` |
-| **Keycloak** | 8180 | Downloaded to `tools/keycloak/` on first run (~150 MB) |
-| **Qdrant** | — | Embedded at `data/qdrant/` (no server needed) |
-| **PaddleOCR / Surya models** | — | Downloaded to `~/.paddlex/official_models/` on first OCR call per language |
-
-### Optional
-
-| Requirement | When needed |
-|---|---|
-| **Node.js + npm** | React frontend (`rag-ui/`) |
-| **Ollama** | Local/offline LLM fallback |
-| **WSL2 + Ubuntu 22.04** | Apache AGE Graph RAG (Sprint 3 only) |
+### Auto-Configured (Downloaded by Orchestrator)
+* **Redis**: Portable Windows Redis server, placed inside `tools/redis/`.
+* **Keycloak**: Server archives unpacked under `tools/keycloak/` (first run).
+* **Qdrant**: Embedded engine writing vector files directly to `data/qdrant/`.
 
 ---
 
-## 12. Complete From-Scratch Setup & Run Guide
+## 12. Complete Setup, Security & Run Guide
 
-### 12.1 Stop & Remove Old PostgreSQL Versions
+Follow these steps chronologically to initialize the databases, launch authentication and gateway proxies, start backend servers, boot monitoring stacks, and deploy the React frontend.
 
-This project requires **PostgreSQL 17** on port **5434**. First, stop any older versions:
+### 12.1 Stop Legacy PostgreSQL Services
+The database **must** run on port `5434` via PostgreSQL 17. Stop and disable legacy PostgreSQL instances (ports 5432/5433):
 
-🟦 **Run in CMD as Administrator:**
+Run as **Administrator** in CMD:
 ```cmd
-:: Stop old PostgreSQL versions (14, 15, 16)
+:: Stop older active installations
 net stop postgresql-x64-14
 net stop postgresql-x64-15
 net stop postgresql-x64-16
 
-:: Disable auto-start
+:: Disable auto-start to prevent port conflicts
 sc config postgresql-x64-14 start= disabled
 sc config postgresql-x64-15 start= disabled
 sc config postgresql-x64-16 start= disabled
 
-:: Verify PostgreSQL 17 is running
+:: Ensure PostgreSQL 17 is active
+net start postgresql-x64-17
 sc query postgresql-x64-17 | findstr "STATE"
 ```
 
-If PostgreSQL 17 is not installed, download from https://www.postgresql.org/download/windows/ and install with:
-- Port: **5434**
-- Superuser password: (your choice, e.g. `1234`)
-
 ---
 
-### 12.2 Python Environment Setup
+### 12.2 Python Environment Setup & Dependencies
+Activate the virtual environment and install packages:
 
-🟦 **Run in PowerShell:**
+**In CMD / PowerShell:**
 ```powershell
-cd "d:\Personal\Fixed Solutions\git files\Chatbot-Fixed-Team2"
-
-# Create virtual environment (first time only)
+# Create virtual environment (run once)
 python -m venv .venv
 
-# Activate
+# Activate (PowerShell)
 .venv\Scripts\Activate.ps1
 
+# Activate (CMD)
+.venv\Scripts\activate.bat
+
+# Install core packaging tools and libraries
 pip install -U pip setuptools wheel
 pip install -r requirements.txt
 ```
 
-> [!NOTE]
-> Installing dependencies may take 10–20 minutes (PyTorch CPU, PaddleOCR/PaddlePaddle, Surya, and other ML libraries — approx. 2–3 GB total).
+---
+
+### 12.3 Environment Configuration & Secrets Check
+1. Copy the example environment template:
+   ```powershell
+   copy .env.example .env
+   ```
+2. Edit `.env` and configure:
+   * `POSTGRES_PASSWORD` — Your PostgreSQL superuser password (e.g. `1234`).
+   * `DATABASE_URL` — Port `5434` (`postgresql+asyncpg://postgres:YOUR_PASSWORD@localhost:5434/domain_db`).
+   * `SYNC_DATABASE_URL` — Port `5434` (`postgresql://postgres:YOUR_PASSWORD@localhost:5434/domain_db`).
+   * `GROQ_API_KEY` — Your cloud LLM key (`gsk_...`).
+   * `INTERNAL_API_KEY` — Generate a strong 32-character random key:
+     ```powershell
+     python -c "import secrets; print(secrets.token_hex(32))"
+     ```
+3. Run the validation checks manually to confirm secrets are secure:
+   ```powershell
+   python scripts/secrets_check.py
+   ```
 
 ---
 
-### 12.3 Environment Configuration
+### 12.4 Database Initialization
+Create the database and execute schemas:
 
-🟦 **Run in PowerShell:**
-```powershell
-copy .env.example .env
-```
-
-Edit `.env` and configure at minimum:
-- `POSTGRES_PASSWORD` — password you set during PostgreSQL 17 installation
-- `POSTGRES_PORT=5434` — match your PostgreSQL 17 port
-- `DATABASE_URL` and `SYNC_DATABASE_URL` — update port to 5434 and password
-- `GROQ_API_KEY` — from [console.groq.com](https://console.groq.com)
-
----
-
-### 12.4 PostgreSQL 17 Database Setup
-
-🟦 **Run in CMD:**
+**In CMD:**
 ```cmd
-set PGPASSWORD=1234
-
-:: Create the application database
+set PGPASSWORD=YOUR_PASSWORD
 psql -h localhost -p 5434 -U postgres -c "CREATE DATABASE domain_db;"
-
-:: Verify it exists
-psql -h localhost -p 5434 -U postgres -l
 ```
 
-🟦 **Run in PowerShell (with virtual environment active):**
+**In virtual environment:**
 ```powershell
-# Run the smart migration script
-python run_migration.py
+python scripts/run_migration.py
 ```
-
-Expected output:
-```
-Connecting to Relational database: localhost:5434/domain_db
-  AGE extension available: False
-  Relational migration complete (N statements executed).
-```
-
-**Verify tables created:**
-```cmd
-set PGPASSWORD=1234
-psql -h localhost -p 5434 -U postgres -d domain_db -c "SELECT tablename FROM pg_tables WHERE schemaname='public';"
-```
-
-Expected tables: `users`, `domains`, `domain_configs`, `domain_roles`, `documents`, `document_chunks`, `rag_query_logs`
-
----
-
-### 12.5 Java & Keycloak Identity Setup
-
-🟦 **Run in PowerShell:**
+*To erase all tables and chunks back to a clean slate, run:*
 ```powershell
-java -version
-```
-
-If not installed, download JDK 17+ from [Adoptium](https://adoptium.net/).
-
-Keycloak is auto-downloaded by `run_services.py` on first run. For manual setup:
-
-```powershell
-mkdir "tools\keycloak\data\import" -Force
-copy "services\auth\realm-export.json" "tools\keycloak\data\import\realm-export.json"
-
-$env:KC_BOOTSTRAP_ADMIN_USERNAME="admin"
-$env:KC_BOOTSTRAP_ADMIN_PASSWORD="admin"
-.\tools\keycloak\bin\kc.bat start-dev --http-port=8180 --import-realm
+python scripts/clear_database.py
+python scripts/run_migration.py
 ```
 
 ---
 
-### 12.6 Redis Setup
-
-Redis is auto-downloaded portable on first `python run_services.py`. For manual install:
+### 12.5 Dev JWT Keys Generation
+If using Dev Auth Mode, initialize the local RSA key pair (Keycloak replacement):
 ```powershell
-winget install Redis.Redis
-redis-server
+python scripts/gen_dev_keys.py
 ```
 
 ---
 
-### 12.7 WSL2 + Apache AGE Setup (Sprint 3 / Optional)
+### 12.6 Start Infrastructure Services (Docker)
+The project dockerizes the default gateway and authentication layers to guarantee consistent routing.
 
-> [!NOTE]
-> Required ONLY for Graph RAG. Skip if using only vector + BM25 retrieval.
-
-🟦 **Run in PowerShell as Administrator (first time only):**
+From the project root directory, run:
 ```powershell
-wsl --install -d Ubuntu-22.04
+docker compose up -d
 ```
+Verify the services are active:
+- **Keycloak Administration:** [http://localhost:8180](http://localhost:8180) (Default Credentials: `admin` / `admin`)
+- **Traefik Dashboard:** [http://localhost:8088](http://localhost:8088)
 
-Reboot, then run the setup script inside Ubuntu:
+---
 
-```bash
-# Inside WSL2 Ubuntu terminal
-cp /mnt/d/Personal/Fixed\ Solutions/git\ files/Chatbot-Fixed-Team2/wsl2_setup_v2.sh ~/wsl2_setup.sh
-chmod +x ~/wsl2_setup.sh
-~/wsl2_setup.sh
-```
-
-**Start Ubuntu (every session):**
+### 12.7 Starting Backend Services (Host Monolith)
+Start the main orchestrator (APIs, celery task queue, and evaluation runner):
 ```powershell
+# WSL2 Ubuntu (Optional - run in background if Apache AGE graph DB is active)
 start "" wsl -d Ubuntu-22.04 -- bash -c "tail -f /dev/null"
 
-# Verify connection
-set PGPASSWORD=55555
-psql -h localhost -p 5434 -U postgres -c "SELECT version();"
+# Run backend services (worker + evaluation metrics enabled)
+python run_services.py --worker --evaluation --skip-infra
 ```
-
-**Create graph database:**
+Verify monolith health:
 ```cmd
-set PGPASSWORD=55555
-psql -h localhost -p 5434 -U postgres -c "CREATE DATABASE domain_db;"
-psql -h localhost -p 5434 -U postgres -d domain_db -f migrations/sprint3_foundation.sql
+curl http://localhost:8001/health
+:: Expected: {"status":"ok","service":"monolith-service"}
 ```
 
 ---
 
-### 12.8 Launching the Backend
+### 12.8 Launch Caddy Reverse Proxy & TLS Termination
+Caddy secures all frontdoors under local SSL/TLS certificates.
 
-🟦 **Run in PowerShell:**
-```powershell
-.venv\Scripts\Activate.ps1
+1. Build the production UI bundle:
+   ```powershell
+   cd rag-ui
+   npm run build
+   cd ..
+   ```
+2. Spawn Caddy using the binary located in `tools/`:
+   ```powershell
+   # In PowerShell environment binding
+   $env:UI_PORT="3001"
+   $env:GATEWAY_PORT="8000"
+   $env:KEYCLOAK_GATEWAY_PORT="8443"
+   $env:KEYCLOAK_PORT="8180"
+   $env:DOMAIN_SERVICE_PORT="8001"
 
-# APIs only (no document processing)
-python run_services.py
+   tools\caddy\caddy.exe run --config Caddyfile
+   ```
+   ```cmd
+   :: In CMD environment binding
+   set UI_PORT=3001
+   set GATEWAY_PORT=8000
+   set KEYCLOAK_GATEWAY_PORT=8443
+   set KEYCLOAK_PORT=8180
+   set DOMAIN_SERVICE_PORT=8001
 
-# Full stack with OCR worker
-python run_services.py --worker
-
-# Full stack with evaluation
-python run_services.py --worker --evaluation
-```
+   tools\caddy\caddy.exe run --config Caddyfile
+   ```
+3. Trust the local CA certificate (Run once as Administrator to resolve browser warnings):
+   ```powershell
+   tools\caddy\caddy.exe trust
+   ```
+Open browser: **[https://localhost:3001](https://localhost:3001)** (UI) or **[https://localhost:8000/docs](https://localhost:8000/docs)** (API docs via Caddy).
 
 ---
 
-### 12.9 React Frontend Setup
+### 12.9 Launch Monitoring Stack & Baseline Metric Collection
+Deploy Prometheus and Grafana to track stack resources:
 
-🟦 **Run in a NEW PowerShell window:**
-```powershell
-cd rag-ui
-npm install
-npm run dev
-```
+1. Deploy the monitoring agents in Docker:
+   ```powershell
+   docker compose -f monitoring/docker-compose.monitoring.yml up -d
+   ```
+   * **Grafana Console:** [http://localhost:3000](http://localhost:3000) (Default: `admin` / `admin`)
+   * **Prometheus UI:** [http://localhost:9092](http://localhost:9092)
+   * **Alertmanager:** [http://localhost:9093](http://localhost:9093)
 
-Navigate to **http://localhost:5173**
+2. Run pre-test baseline collection (execute in Git Bash or WSL2 Ubuntu):
+   ```bash
+   bash monitoring/scripts/baseline.sh
+   ```
+   *This command writes and prints results automatically to:* `monitoring/baseline_results.txt`.
 
 ---
 
-### 12.10 End-to-End System Verification
+### 12.10 Start Locust Load Test & Apply Tuning
+Simulate concurrent users querying the backend endpoints.
 
-🟦 **Run in PowerShell:**
-```powershell
-# Verify all service health endpoints
-Invoke-RestMethod http://localhost:8001/health
-Invoke-RestMethod http://localhost:8002/health
-Invoke-RestMethod http://localhost:8003/health
-Invoke-RestMethod http://localhost:8004/generate/health
+1. Start Locust (ensure virtual environment is active):
+   * **Option A: Direct Monolith load testing (bypassing HTTPS Caddy gateway):**
+     ```powershell
+     locust -f tests/load_test.py --host=http://localhost:8001
+     ```
+   * **Option B: Gateway load testing (requires Caddy running):**
+     ```powershell
+     locust -f tests/load_test.py --host=https://localhost:8000
+     ```
+     Open **[http://localhost:8089](http://localhost:8089)** to configure user count and spawn rate.
+   * **Option C: Headless direct monolith test (3 minutes duration):**
+     ```powershell
+     locust -f tests/load_test.py --host=http://localhost:8001 --users 50 --spawn-rate 5 --run-time 3m --headless --csv=tests/load_results
+     ```
+2. Apply bottleneck tuning:
+   If telemetry reveals high latency, execute the tuning scripts inside Git Bash or WSL2:
+   ```bash
+   bash monitoring/scripts/tuning.sh A    # Fix PostgreSQL Connection Pool Exhaustion
+   bash monitoring/scripts/tuning.sh B    # Fix Redis Memory Limit / Evictions
+   bash monitoring/scripts/tuning.sh C    # Increase Uvicorn/Celery Worker Processes
+   bash monitoring/scripts/tuning.sh D    # Run EXPLAIN ANALYZE on Slow SQL Queries
+   bash monitoring/scripts/tuning.sh E    # Add Missing Databases Indexes
+   bash monitoring/scripts/tuning.sh ALL  # Run all diagnostics and index additions
+   ```
 
-# Get a dev auth token
-$token = (Invoke-RestMethod -Uri http://localhost:8001/domains/auth/login -Method POST -ContentType "application/json" -Body '{"user_id":"admin"}').token
+---
 
-# Upload a test document (should return 202 Accepted)
-curl.exe -X POST http://localhost:8002/ingest -H "Authorization: Bearer $token" -F "file=@test.pdf" -F "domain_id=11111111-1111-1111-1111-111111111111"
+### 12.11 React UI Serving (3 Deployment Options)
 
-# Query for an answer
-curl.exe -X POST http://localhost:8004/generate/query -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d '{"query": "What is the main topic?", "domain_id": "11111111-1111-1111-1111-111111111111"}'
-```
+* **💻 Option A: Vite Development Server**
+  Best for active code editing and local development.
+  ```powershell
+  cd rag-ui
+  npm install
+  npm run dev
+  ```
+  Open browser: **[http://localhost:5173](http://localhost:5173)**
+
+* **🐊 Option B: Production Gateway serving with Caddy**
+  Serves the compiled production bundle via HTTPS on port `3001` (Uses Step 12.8 above).
+  Open browser: **[https://localhost:3001](https://localhost:3001)**
+
+* **🖥️ Option C: Production Serving via Windows IIS**
+  Serves the React app and proxies backend routes using IIS's native modules.
+
+  1. **Enable IIS** on your Windows system:
+     * Search for **"Turn Windows features on or off"** in the Windows Start menu.
+     * Check **Internet Information Services**.
+     * Expand and check **Common HTTP Features** (Static Content) and **Application Development Features** (.NET Extensibility, ASP.NET).
+  2. **Install URL Rewrite Module:**
+     * Download and install: [IIS URL Rewrite Download](https://www.iis.net/downloads/microsoft/url-rewrite).
+  3. **Install Application Request Routing (ARR 3.0):**
+     * Download and install: [IIS ARR Download](https://www.iis.net/downloads/microsoft/application-request-routing).
+     * Open IIS Manager, click on your server node, select **Application Request Routing Cache**, click **Server Proxy Settings** in the right pane, check **Enable proxy**, and click **Apply**.
+  4. **Deployment Setup:**
+     * Build the frontend production folder:
+       ```powershell
+       cd rag-ui
+       npm run build
+       ```
+       *This generates output files in `rag-ui/dist/` alongside a pre-configured `web.config` file.*
+     * **Add a new IIS Website:**
+       * Open **IIS Manager** (`inetmgr`).
+       * Right-click **Sites** -> **Add Website**.
+       * **Site name:** `rag-ui`
+       * **Physical path:** `d:\Personal\Fixed Solutions\Project Files\Last Version\rag-ui\dist`
+       * **Port:** `3001` (matching UI_PORT from your `.env`).
+     * **Configure Rewrite Proxy Endpoint in `web.config`:**
+       * If IIS does not have the system environment variables configured, open the compiled `rag-ui/dist/web.config` file, locate the API Proxy rule action:
+         `url="http://localhost:{ENV:DOMAIN_SERVICE_PORT}/{R:0}"`
+         and hardcode your backend monolith port (`8001`):
+         `url="http://localhost:8001/{R:0}"`
+     * **Permissions Configuration:**
+       * Ensure the IIS Application Pool identity (typically `IIS_IUSRS` or `IUSR`) has read permissions to the `rag-ui/dist` directory.
+     * **Access the Application:**
+       Open browser: **[http://localhost:3001](http://localhost:3001)**
+
 
 ---
 
 ## 13. Environment Variables
 
-All services read from a single root `.env`. See `.env.example` for detailed inline documentation of every variable.
+All services load environment variables from the shared root `.env`.
 
-### Required Variables
+### Core Options Reference
 
-| Variable | Purpose | Where to Get |
+| Variable | Default Value | Purpose |
 |---|---|---|
-| `POSTGRES_PASSWORD` | PostgreSQL password | Set during PostgreSQL 17 installation |
-| `POSTGRES_PORT` | PostgreSQL port | `5434` (this project's default) |
-| `DATABASE_URL` | Async Postgres URL | `postgresql+asyncpg://postgres:<pw>@localhost:5434/domain_db` |
-| `SYNC_DATABASE_URL` | Sync Postgres URL | `postgresql://postgres:<pw>@localhost:5434/domain_db` |
-| `GROQ_API_KEY` | Cloud LLM API key | [console.groq.com](https://console.groq.com) → API Keys |
-
-### All Variables Summary
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `POSTGRES_USER` | `postgres` | PostgreSQL username |
-| `POSTGRES_DB` | `domain_db` | Database name |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection |
-| `QDRANT_PATH` | `data/qdrant` | Embedded vector store path |
-| `KEYCLOAK_ISSUER` | `http://localhost:8180/realms/rag-system` | JWT issuer URL |
-| `KEYCLOAK_PUBLIC_KEY` | (blank) | Auto-set by `run_services.py` |
-| `INTERNAL_API_KEY` | `rag-internal-dev-key-change-in-prod` | Shared secret for internal endpoints |
-| `AGE_DATABASE_DSN` | (blank) | Graph DB connection (Sprint 3 only) |
-| `AGE_GRAPH_NAME` | `rag_graph` | Apache AGE graph name |
-| `DEFAULT_LLM_ROUTE` | `api` | `api`=Groq, `local`=Ollama |
-| `DEFAULT_CHUNK_SIZE` | `512` | Characters per chunk |
-| `DEFAULT_CHUNK_OVERLAP` | `64` | Overlap between chunks |
-| `DEFAULT_CONFIDENCE_THRESHOLD` | `0.5` | Min retrieval score for LLM context |
-| `TOP_K_RETRIEVE` | `20` | Candidates before reranking |
-| `TOP_K_RERANK` | `5` | Final chunks sent to LLM |
-| `CACHE_TTL_SECONDS` | `3600` | Redis cache TTL |
-| `OCR_LANG` | `en` | Single-language PaddleOCR |
-| `OCR_LANGS` | (unset) | Multi-language, comma-separated |
-| `OCR_CONFIDENCE_THRESHOLD` | `0.85` | Paddle score above which Surya is skipped |
-| `EVALUATE_ON_GENERATION` | `true` | Auto-evaluate each generated answer |
-| `EVAL_SAMPLE_RATE` | `1.0` | Fraction of queries to evaluate |
-| `HF_HOME` | `D:\huggingface_cache` | Hugging Face model cache directory |
-| `KMP_DUPLICATE_LIB_OK` | `TRUE` | Prevent OpenMP DLL conflicts |
+| `POSTGRES_PORT` | `5434` | Target port for PostgreSQL 17 |
+| `DATABASE_URL` | `postgresql+asyncpg://...` | Async SQLAlchemy database driver DSN |
+| `REDIS_URL` | `redis://localhost:6379/0` | Celery message broker & Cache DSN |
+| `QDRANT_PATH` | `data/qdrant` | Embedded vector database directory |
+| `INTERNAL_API_KEY` | (needs change) | Secret key protecting microservice communication |
+| `AGE_DATABASE_DSN` | (empty) | DSN mapping to Apache AGE WSL2 instance (Sprint 3) |
+| `EVALUATE_ON_GENERATION` | `true` | Auto-trigger LLM evaluation per answer |
+| `OCR_LANGS` | `ar,en` | Supported OCR scanner languages |
 
 ---
 
 ## 14. Troubleshooting
 
-### PostgreSQL 17 — Connection Refused (Port 5434)
-
-```cmd
-:: Start Windows PostgreSQL 17
-net start postgresql-x64-17
-sc query postgresql-x64-17 | findstr "STATE"
-```
-
-If using WSL2 PostgreSQL:
-```powershell
-wsl -l -v
-start "" wsl -d Ubuntu-22.04 -- bash -c "tail -f /dev/null"
-```
-
-### Old PostgreSQL Version Still Running
-
-```cmd
-net stop postgresql-x64-16
-sc config postgresql-x64-16 start= disabled
-```
-
-### Redis — Connection Refused
-
-```powershell
-# Start manually
-tools\redis\redis-server.exe tools\redis\redis.windows.conf
-# Check port
-netstat -ano | findstr :6379
-```
-
-### Keycloak — Not Ready / Slow Start
-
-Keycloak takes **30–90 seconds** on first start. Wait and retry:
-```powershell
-curl http://localhost:8180/realms/rag-system
-```
-
-### Keycloak — Java Not Found
-
-Install Java 17 from https://adoptium.net/ and restart terminal.
-
-### Celery Worker Fails on Windows (billiard errors)
-
-```powershell
-python -m celery -A worker worker --loglevel=info -Q ingestion --pool=solo
-```
-
-### OpenMP Crash (`KMP_DUPLICATE_LIB_OK`)
-
-```powershell
-$env:KMP_DUPLICATE_LIB_OK="TRUE"
-```
-
-### OCR — DLL Load Failed (`libpaddle`)
-
-Install Microsoft Visual C++ Redistributable (x64): https://aka.ms/vs/17/release/vc_redist.x64.exe — restart terminal.
-
-### OCR — `NotImplementedError: ConvertPirAttribute2RuntimeAttribute`
-
-Known `paddlepaddle==3.3.x` CPU issue. Already worked around in `paddle_engine.py` via `enable_mkldnn=False`.
-
-### OCR — Worker Exits Code `0xC0000005`
-
-Already worked around in `paddle_engine.py` via `text_detection_model_name="PP-OCRv5_mobile_det"`.
-
-### OCR — Wrong Language / Poor Accuracy
-
-```ini
-OCR_LANG=ar         # Arabic-only
-OCR_LANGS=ar,en     # Mixed Arabic/English
-```
-
-### HuggingFace Model Download — SSL Error
-
-```powershell
-.venv\Scripts\pip install truststore
-```
-
-### Port Already In Use
-
-```powershell
-netstat -ano | findstr ":8001 :8002 :8003 :8004 :5434 :6379 :8180"
-taskkill /PID <pid> /F
-```
-
-### Unicode Errors in Worker (Windows cp1252)
-
-```powershell
-$env:PYTHONIOENCODING="utf-8"
-$env:PYTHONUTF8=1
-chcp 65001
-```
-
-### Ingestion Stuck on `processing`
-
-- Check Celery worker is running: `python run_services.py --worker`
-- On Windows, Celery requires `--pool=solo`
-- First OCR call per language triggers model download — check worker log for `Loading PaddleOCR...`
-
-### First Query Very Slow
-
-Expected. Retrieval service loads embedding + reranker models on first request (~10–30 seconds). Subsequent queries are fast. Identical queries cached instantly.
-
-### Windows — WinError 1455 / Paging File Too Small
-
-- Increase Virtual Memory to at least 16 GB
-- Close Docker Desktop, multiple IDEs
-- `run_services.py` staggers startup automatically — let it complete
-
-### WSL2 PostgreSQL Not Reachable (`localhost:5434`)
-
-Inside WSL2 Ubuntu:
-```bash
-sudo service postgresql status
-sudo service postgresql restart
-sudo grep listen_addresses /etc/postgresql/17/main/postgresql.conf
-sudo grep "0.0.0.0" /etc/postgresql/17/main/pg_hba.conf
-```
-
-### 401 Unauthorized
-
-- Token expired (5-min lifespan) — get a fresh token
-- Missing `Authorization: Bearer <token>` header
-- Keycloak not fully started — wait 30–60 seconds
-
-### 403 Forbidden on Upload
-
-User lacks `contributor` role. Use `admin` user or assign domain membership.
-
-### Database Schema Mismatch
-
-```powershell
-psql -h localhost -p 5434 -U postgres -d domain_db -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-```
-
-Then restart `run_services.py` to recreate clean tables.
-
-### Step 6 Logs `GROQ_API_KEY not set — skipping relation extraction`
-
-Add `GROQ_API_KEY` to `.env`. Step 5 (NER) still runs — only relation extraction is skipped.
+* **PostgreSQL Port conflicts (5434 already in use)**:
+  Check for hidden Postgres services:
+  ```cmd
+  netstat -ano | findstr :5434
+  taskkill /PID <PID_FROM_NETSTAT> /F
+  ```
+* **SSL Certificate Warnings in Browser**:
+  Verify Caddy certificate was installed:
+  ```powershell
+  tools\caddy\caddy.exe trust
+  ```
+* **Celery worker billiard errors on Windows**:
+  Windows does not support default celery prefork pool. Ensure orchestrator starts Celery with `--pool=solo`.
+* **OCR DLL Load Errors (`libpaddle`)**:
+  Make sure you have installed the Microsoft Visual C++ Redistributable (x64) and restarted your command prompt.
 
 ---
 
@@ -1398,69 +715,37 @@ Add `GROQ_API_KEY` to `.env`. Step 5 (NER) still runs — only relation extracti
 
 ```
 Chatbot-Fixed-Team2/
-├── .env.example                      # environment template with full documentation
-├── .env                              # your local config (not committed)
-├── .gitignore                        # comprehensive ignore rules
-├── requirements.txt                  # unified Python dependencies
-├── run_services.py                   # main launcher (starts all services)
-├── run_migration.py                  # smart migration runner (handles AGE detection)
-├── clear_database.py                 # wipe all data and reset to clean slate
-├── delete_chunks.py                  # database + vector store reset tool
-├── wsl2_setup_v2.sh                  # WSL2 setup script for PostgreSQL 17 + Apache AGE
-├── run_guide.md                      # step-by-step Windows runner guide
-├── README.md                         # this file — complete project reference
-├── migrations/                       # database SQL scripts
-│   ├── setup_all.sql                 # creates schema + seeds initial data (used by run_migration.py)
-│   ├── init_db.sql                   # legacy full init script
-│   ├── sprint2_migration.sql         # Sprint 2 migration (source_type column)
-│   ├── sprint3_foundation.sql        # Sprint 3 — Apache AGE setup + ontology labels
-│   └── clear_db.sql                  # wipe all tables (used by run_migration.py)
-├── data/                             # auto-created runtime data (gitignored)
-│   ├── qdrant/                       # embedded vector DB files
-│   ├── uploads/                      # uploaded documents (PDF, DOCX, CSV, images)
-│   └── dev/                          # dev JWT RSA key pair (fallback auth)
-├── tools/                            # auto-downloaded infra (gitignored)
-│   ├── redis/                        # portable Redis for Windows
-│   └── keycloak/                     # Keycloak 26.5.0
-├── rag-ui/                           # React frontend (Vite + TypeScript + Tailwind)
-│   ├── src/
-│   │   ├── components/               # UI components (ChatBox, DomainCard, CitationPanel...)
-│   │   ├── pages/                    # View pages (Login, Dashboard, Upload, Evaluate)
-│   │   ├── store/                    # Zustand state management stores
-│   │   └── lib/                      # API clients (axios instances per service)
-│   └── vite.config.ts
-├── scripts/                          # shared runtime modules
-│   ├── dev_auth.py                   # fallback JWT auth (mints dev tokens)
-│   ├── infra_manager.py              # downloads + starts Redis + Keycloak
-│   ├── memory_cache.py               # in-memory TTL cache (Redis fallback)
-│   ├── network_bootstrap.py          # SSL bootstrap for model downloads
-│   └── qdrant_client_factory.py      # Qdrant embedded client helpers
-└── services/
-    ├── auth/realm-export.json        # Keycloak realm configuration
-    ├── domain-service/               # port 8001 — domain CRUD + RBAC
-    ├── ingestion-service/            # port 8002 — file upload + job queue
-    ├── retrieval-service/            # port 8003 — hybrid search pipeline + graph routing
-    ├── generation-service/           # port 8004 — RAG orchestration + LLM
-    ├── evaluation-service/           # port 8005 — LLM-as-judge + Celery Beat
-    └── worker-service/               # Celery worker
-        ├── ontology.py               # Sprint 3 — entity/relation type definitions
-        ├── ner.py                    # Sprint 3 — GLiNER entity extraction (lazy-loaded)
-        ├── relation_extraction.py    # Sprint 3 — LLM-based relation extraction (20 chunks/call)
-        └── tasks/
-            ├── extract.py            # format routing + OCR pipeline entry point
-            ├── process.py            # 6-step pipeline: extract→chunk→embed→index→NER→relations
-            └── ocr-service/
-                └── ocr_service/
-                    ├── pipeline.py            # top-level OCR entry point
-                    ├── preprocessing/
-                    │   └── image_processor.py # denoise, deskew, resize
-                    ├── engines/
-                    │   ├── paddle_engine.py   # PaddleOCR (fast path)
-                    │   └── surya_engine.py    # Surya (fallback)
-                    ├── scoring/
-                    │   └── ocr_scorer.py      # confidence scoring
-                    └── routing/
-                        └── ocr_router.py      # PaddleOCR → Surya routing decision
+├── .env.example
+├── .env
+├── .gitignore
+├── requirements.txt
+├── run_services.py
+├── Caddyfile
+├── docker-compose.yml
+├── dockerignore
+├── data/                             # runtime vectors, uploads, and local JWT keys
+├── docs/                             # architectural guides and documents
+│   ├── run_guide.md
+│   ├── full_execution_guide.md
+│   └── TLS_Secrets_RAG_System.md
+├── scripts/                          # helper management scripts
+│   ├── clear_database.py             # wipes database tables
+│   ├── delete_chunks.py              # wipes Qdrant collections + database
+│   ├── download_onnx.py              # helper to download GLiNER model
+│   ├── run_migration.py              # run database migrations and reset scripts
+│   ├── wsl2_setup_v2.sh              # setup Postgres 17 + AGE inside WSL2
+│   ├── dev_auth.py
+│   ├── infra_manager.py
+│   └── secrets_check.py
+├── tools/                            # binaries & services
+│   ├── caddy/
+│   │   └── caddy.exe                 # Local TLS gateway executable
+│   ├── helm/
+│   │   └── helm.exe                  # Kubernetes Helm CLI
+│   ├── redis/                        # Portable Redis
+│   └── keycloak/                     # Keycloak server files
+├── rag-ui/                           # React frontend
+└── services/                         # FastAPI monolith source code
 ```
 
 ---
@@ -1469,66 +754,33 @@ Chatbot-Fixed-Team2/
 
 ```text
 ═══════════════════════════════════════════════════════════════
-  RAG System — Quick Reference Card
+  RAG System — Quick Reference Commands
 ═══════════════════════════════════════════════════════════════
 
-POSTGRES 17 MANAGEMENT:
-  net stop postgresql-x64-16          # stop old version
-  net start postgresql-x64-17         # ensure PG17 runs (port 5434)
-  sc query postgresql-x64-17 | findstr "STATE"
+CLEAN RESET:
+  python scripts/delete_chunks.py       # reset Qdrant + postgres tables
+  python scripts/clear_database.py      # reset database tables only
+  python scripts/run_migration.py       # run migration scripts
 
-DATABASE SETUP:
-  psql -p 5434 -U postgres -c "CREATE DATABASE domain_db;"
-  python run_migration.py              # create tables + seed data
-  python clear_database.py            # wipe all data (then re-migrate)
+RUN BACKEND MONOLITH:
+  python run_services.py --worker --evaluation --skip-infra
 
-WSL2 (Apache AGE — optional):
-  start "" wsl -d Ubuntu-22.04 -- bash -c "tail -f /dev/null"
-  wsl -l -v                           # verify Running state
+RUN TLS PROXY GATEWAY:
+  $env:UI_PORT="3001"
+  $env:GATEWAY_PORT="8000"
+  $env:KEYCLOAK_GATEWAY_PORT="8443"
+  $env:KEYCLOAK_PORT="8180"
+  $env:DOMAIN_SERVICE_PORT="8001"
+  tools\caddy\caddy.exe run --config Caddyfile
 
-BACKEND (project root, venv active):
-  python run_services.py              # APIs + infra
-  python run_services.py --worker     # + OCR Celery worker
-  python run_services.py --worker --evaluation  # full stack
-  Ctrl+C                              # graceful shutdown
+MONITORING (Docker):
+  cd monitoring
+  docker compose -f docker-compose.monitoring.yml up -d
+  bash scripts/baseline.sh              # collect idle baselines
 
-FRONTEND (new terminal):
-  cd rag-ui && npm install && npm run dev
-  # → http://localhost:5173
-
-HEALTH CHECKS:
-  http://localhost:8001/health         # domain-service
-  http://localhost:8002/health         # ingestion-service
-  http://localhost:8003/health         # retrieval-service
-  http://localhost:8004/generate/health# generation-service
-  http://localhost:8005/docs           # evaluation Swagger
-  http://localhost:8180/realms/rag-system # Keycloak realm
-
-SWAGGER UIs:
-  http://localhost:8001/docs  → http://localhost:8004/docs
-
-DEV AUTH USERS:
-  admin       → system_admin (create domains, all operations)
-  manager     → domain_admin (manage assigned domains)
-  contributor → contributor (upload + query)
-  viewer      → reader (query only)
-
-TOKEN (dev auth):
-  POST http://localhost:8001/domains/auth/login
-  Body: {"user_id": "admin"}
-
-TYPICAL FLOW:
-  1. Get JWT token (dev auth or Keycloak)
-  2. POST /domains              → create domain
-  3. POST /ingest               → upload PDF/DOCX/image
-  4. GET  /ingest/{document_id} → poll until "done"
-  5. POST /generate/query       → get AI answer + citations
-  6. GET  /evaluate             → check answer quality score
-
-OCR CONFIG (in .env):
-  OCR_LANG=en           → single language (default English)
-  OCR_LANGS=ar,en       → multi-language (Arabic + English)
-  OCR_CONFIDENCE_THRESHOLD=0.85  → Surya fallback threshold
+FRONTEND DEV SERVER:
+  cd rag-ui
+  npm install && npm run dev            # http://localhost:5173
 ═══════════════════════════════════════════════════════════════
 ```
 
@@ -1538,211 +790,57 @@ OCR CONFIG (in .env):
 
 ### 17.1 What This Sprint Adds
 
-Sprints 1–2 retrieve answers via **dense vector search** (meaning) and **sparse BM25 search** (keywords). Both search *text similarity*. Neither can answer relationship questions like *"Who manages Project Alpha?"* — that requires a **knowledge graph**: entities connected by typed relationships.
+Sprint 3 implements an additive **Knowledge Graph** layer using **Apache AGE** on top of the vector and BM25 channels. It connects extracted entities (Person, Project, Department, Policy, Role, Location, Skill) through structured typed relations (MANAGES, BELONGS_TO, REPORTS_TO, OWNS, HAS_ROLE, WORKS_ON, HAS_SKILL, BASED_AT).
 
-Sprint 3 adds that graph layer on top of the existing system **without modifying any Sprint 1–2 code path**. If the graph layer fails for any reason, document ingestion and querying continue exactly as before.
+### 17.2 WSL2 Apache AGE Setup
 
-### 17.2 Why Apache AGE Instead of Neo4j
-
-| | Neo4j | Apache AGE (chosen) |
-|---|---|---|
-| Infrastructure | Separate DB server | Extension inside PostgreSQL — same engine already used |
-| Domain isolation | Must re-implement | Reuses `domain_id` pattern from every other table |
-| Chunk↔Graph linking | Cross-database join | Same database — can join with `document_chunks` directly |
-| New failure point | Yes — entire new server | No — same Postgres instance |
-
-### 17.3 Why a Second PostgreSQL Instance (WSL2)
-
-Apache AGE has no prebuilt Windows binary for PostgreSQL (for the Windows version). Two options were evaluated:
-
-1. **Native Windows PostgreSQL + AGE** — no prebuilt binary; requires compiling from source on Windows (complex, fragile)
-2. **WSL2 Ubuntu + PostgreSQL 17 + AGE** — official Linux build, zero risk to the existing setup. **(Chosen.)**
-
-The WSL2 PostgreSQL 17 + AGE instance runs on port **5434**, reachable from Windows like any other database. Python services connect via `AGE_DATABASE_DSN`.
-
-### 17.4 Setting Up PostgreSQL 17 + Apache AGE (WSL2)
-
-> [!NOTE]
-> Skip this section if you don't need graph-based retrieval.
-
-#### 1. Install WSL2 + Ubuntu
-
-```powershell
-# PowerShell as Administrator
-wsl --install -d Ubuntu-22.04
-# Reboot when prompted
-```
-
-#### 2. Run the Setup Script
-
-```bash
-# Inside WSL2 Ubuntu terminal
-cp /mnt/d/Personal/Fixed\ Solutions/git\ files/Chatbot-Fixed-Team2/wsl2_setup_v2.sh ~/wsl2_setup.sh
-chmod +x ~/wsl2_setup.sh
-~/wsl2_setup.sh
-```
-
-The script:
-- Installs PostgreSQL 17 from the official PGDG APT repository
-- Clones and compiles Apache AGE (`PG17/v1.6.0-rc0` tag) from source
-- Configures PostgreSQL to listen on port `5434`
-- Sets the `postgres` user password to `55555`
-- Initializes the `rag_graph` in Apache AGE
-
-#### 3. Start Ubuntu Every Session
-
-```powershell
-start "" wsl -d Ubuntu-22.04 -- bash -c "tail -f /dev/null"
-wsl -l -v  # → Ubuntu-22.04 Running
-```
-
-#### 4. Create the Application Database
-
-```cmd
-set PGPASSWORD=55555
-psql -h localhost -p 5434 -U postgres -c "CREATE DATABASE domain_db;"
-psql -h localhost -p 5434 -U postgres -d domain_db -f migrations/sprint3_foundation.sql
-```
-
-Expected output includes: `CREATE EXTENSION`, `create_vlabel` ×7, `create_elabel` ×8, `CREATE INDEX` ×7
-
-#### 5. Update `.env` for Graph Connection
-
-```ini
-AGE_DATABASE_DSN=postgresql://postgres:55555@localhost:5434/domain_db
-AGE_GRAPH_NAME=rag_graph
-```
-
-#### 6. Re-run Migration
-
-```powershell
-python run_migration.py
-```
-
-The migration now connects to both databases, automatically detects AGE, and runs graph-specific SQL only on the AGE instance.
+1. Enable WSL2 Ubuntu 22.04:
+   ```powershell
+   wsl --install -d Ubuntu-22.04
+   ```
+2. Copy and execute the setup script:
+   ```bash
+   # Inside WSL2 Ubuntu terminal
+   cp /mnt/d/Personal/Fixed\ Solutions/Project\ Files/Last\ Version/scripts/wsl2_setup_v2.sh ~/wsl2_setup.sh
+   chmod +x ~/wsl2_setup.sh
+   ~/wsl2_setup.sh
+   ```
+3. Initialize the database schema:
+   ```cmd
+   set PGPASSWORD=55555
+   psql -h localhost -p 5434 -U postgres -c "CREATE DATABASE domain_db;"
+   psql -h localhost -p 5434 -U postgres -d domain_db -f migrations/sprint3_foundation.sql
+   ```
+4. Enable `AGE_DATABASE_DSN` inside `.env`:
+   ```ini
+   AGE_DATABASE_DSN=postgresql://postgres:55555@localhost:5434/domain_db
+   AGE_GRAPH_NAME=rag_graph
+   ```
 
 ---
 
-### 17.5 The Ontology
+## 18. Monitoring — Prometheus + Grafana
 
-Entity and relation types are defined **once** in `services/worker-service/ontology.py`. Every Sprint 3 component imports from this single file.
+### 18.1 Grafana Telemetry Dashboard Panels
 
-| Entity Types (7 Vertex Labels) | Relation Types (8 Edge Labels) |
-|---|---|
-| Person | MANAGES |
-| Project | BELONGS_TO |
-| Department | REPORTS_TO |
-| Policy | OWNS |
-| Role | HAS_ROLE |
-| Location | WORKS_ON |
-| Skill | HAS_SKILL |
-| | BASED_AT |
+The monitoring stack launches Prometheus scraping metrics from all monolith modules, exposing 4 dashboards inside Grafana ([http://localhost:3000](http://localhost:3000)):
+
+* **Service Health**: Tracks query rates, HTTP latencies (p50/p95/p99), and HTTP status codes.
+* **Evaluation Quality**: Visualizes LLM judge metrics (Faithfulness, Relevance, and Completeness) scored 0.0 to 1.0.
+* **Infra Overview**: Monitours database connection pool size, active Redis caching memory, memory saturation, and CPU loads.
+* **Retrieval Pipeline**: Details the latency breakdown per search stage (dense vector lookup, BM25 query time, fusion rank calculation, and reranker engine).
 
 ---
 
-### 17.6 Failure Isolation
+## 19. Load Testing — Infrastructure Monitoring
 
-`tasks/process.py` pipeline — 6 steps:
+Locust tests simulate concurrent user traffic (`tests/load_test.py`) to benchmark the system under heavy Q&A volumes.
 
-```
-[1/6] Extract text          ─┐
-[2/6] Chunk (semantic)        │  Sprints 1–2 — unchanged core RAG
-[3/6] Embed                   │
-[4/6] Index (Qdrant + PG)    ─┘
+### 19.1 System Tuning Commands
 
-[5/6] Extract entities (NER)  ─┐  Sprint 3 — additive.
-[6/6] Extract relations (LLM) ─┘  Wrapped in try/except.
-                                   Failure here → warning logged
-                                   Document still completes status="done"
-```
-
-Steps 5–6 run **after** indexing — the document is already fully searchable via Vector/BM25 before graph extraction begins.
-
----
-
-### 17.7 Entity & Relation Extraction Pipeline
-
-#### Step 5 — NER (`ner.py`)
-
-Uses **GLiNER multilingual** (`urchade/gliner_multi-v2.1`), loaded lazily on first use. Labels sent as natural-language descriptions (e.g. `"a person name"` rather than bare `"Person"`) — spike testing on Arabic documents showed this produces measurably higher-confidence matches.
-
-| Spike test (real Arabic document sentences) | Entity | Confidence |
-|---|---|---|
-| "يُعد جون جاكسون أول من وضع الأساس..." | جون جاكسون → Person | 0.92 |
-| "أحمد محمد يدير مشروع تطوير النظام..." | أحمد محمد → Person | 0.97 |
-| (same sentence) | مشروع تطوير النظام → Project | 0.52 |
-| (same sentence) | قسم تقنية المعلومات → Department | 0.89 |
-
-`CONFIDENCE_THRESHOLD = 0.6` filters out low-confidence noise.
-
-#### Step 6 — Relation Extraction (`relation_extraction.py`)
-
-Takes entities from Step 5 and determines **typed relationships** between them using Groq LLM.
-
-- **Why LLM instead of spaCy?** spaCy has no official Arabic dependency parser. Published Arabic dependency-parsing accuracy tops out ~76%; an LLM reading the sentence directly is more reliable.
-- **Batching:** `CHUNKS_PER_GROUP = 20` — roughly 10 LLM calls for a 200-chunk document.
-- **Validation:** Every triple is validated against `ontology.RELATION_TYPES` — hallucinated relation types outside the 8 defined ones are dropped.
-
----
-
-### 17.8 Query-Time Graph Retrieval & Routing
-
-```mermaid
-flowchart TD
-    Q["User Query"]
-    NORM["Normalize\n(strip Harakat, unify spelling)"]
-    KW{"Relational keywords?\n(manages, who is, يدير, مدير, قسم...)"}
-    NER2["Query-Time NER\n+ Substring Match vs Graph Nodes"]
-    CYPHER["1-Hop Cypher Traversal\nMATCH v - r - neighbor"]
-    CHUNKS["Resolve chunk_ids\nfrom matched entities"]
-    FUSE["Score Fusion\nGraph chunks → 0.95 priority"]
-
-    Q --> NORM --> KW
-    KW -->|Yes| NER2 --> CYPHER --> CHUNKS --> FUSE
-    KW -->|No| FUSE
-
-    style CYPHER fill:#2c5f8a,color:#fff
-    style FUSE fill:#f59e0b,color:#000
-```
-
-1. Query normalized (Arabic diacritics stripped, spelling variants unified)
-2. Checked against all node names in the domain's graph — substring matching
-3. Matched entities → 1-hop Cypher traversal: entity + relationships + neighbors
-4. `chunk_ids` from matched entities resolved → raw text chunks from PostgreSQL
-5. Graph chunks assigned score `0.95` → fused with Vector + BM25 results
-
----
-
-### 17.9 Performance & Evaluation
-
-#### LLM-as-Judge Evaluation
-```powershell
-python run_services.py --evaluation
-# POST http://localhost:8005/evaluate → score 0.0–1.0 with faithfulness/completeness explanation
-```
-
-#### Query Audit Logs
-```sql
--- Cache hit rate by model
-SELECT
-    model,
-    COUNT(*) as total_queries,
-    SUM(CASE WHEN cache_hit THEN 1 ELSE 0 END)::float / COUNT(*) as cache_hit_rate
-FROM rag_query_logs
-GROUP BY model;
-```
-
----
-
-### 17.10 Sprint 3 Troubleshooting
-
-| Problem | Solution |
-|---|---|
-| `localhost:5434` unreachable from Windows | Verify Ubuntu is Running: `wsl -l -v`. Start: `start "" wsl -d Ubuntu-22.04 -- bash -c "tail -f /dev/null"` |
-| `extension "age" is not available` | AGE build failed — re-run Steps 4–5 of `wsl2_setup_v2.sh` inside WSL2, check for compile errors |
-| NER very slow on first document | Expected — GLiNER downloads (~500 MB–1 GB) on first worker restart, cached afterward |
-| `GROQ_API_KEY not set — skipping relation extraction` | Add `GROQ_API_KEY` to `.env`. Step 5 (NER) still runs. |
-| `UnicodeDecodeError: 'charmap'` in worker logs | Run: `$env:PYTHONUTF8=1; chcp 65001` before starting services |
-| `listen_addresses` not set | Inside WSL2: `sudo nano /etc/postgresql/17/main/postgresql.conf` → set `listen_addresses = '*'`, then `sudo service postgresql restart` |
-
----
+Run specific sections of `scripts/tuning.sh` via Git Bash / WSL2 if bottlenecks are observed:
+* `bash monitoring/scripts/tuning.sh A` — Scale database connection pools (`max_connections`).
+* `bash monitoring/scripts/tuning.sh B` — Optimize Redis memory boundaries and evictions.
+* `bash monitoring/scripts/tuning.sh C` — Scale backend Uvicorn processes and worker pools.
+* `bash monitoring/scripts/tuning.sh D` — Execute diagnostics and `EXPLAIN ANALYZE` on database queries.
+* `bash monitoring/scripts/tuning.sh E` — Apply missing indexes to `document_chunks` GIN/B-Tree fields.

@@ -32,4 +32,4 @@ scrape_configs:
   # ── Prometheus self-monitoring ──────────────────────────────────────────────
   - job_name: prometheus
     static_configs:
-      - targets: ["localhost:9091"]
+      - targets: ["localhost:9090"]

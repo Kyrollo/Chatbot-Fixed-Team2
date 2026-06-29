@@ -42,11 +42,16 @@ import time
 import random
 
 import httpx
+from pathlib import Path
 from dotenv import load_dotenv
 
 from ontology import RELATION_TYPES
 
-load_dotenv()
+root_env = Path(__file__).resolve().parents[2] / ".env"
+if root_env.exists():
+    load_dotenv(root_env)
+else:
+    load_dotenv()
 
 # Matches the env var names already used by retrieval-service/generation-service
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
@@ -150,7 +155,13 @@ def _call_llm(user_message: str, attempt: int = 0) -> list[dict]:
             # Handle 429 explicitly
             if resp.status_code == 429:
                 if attempt < MAX_RETRIES:
-                    retry_after = float(resp.headers.get("retry-after", 0))
+                    try:
+                        retry_after = float(resp.headers.get("retry-after", 0))
+                    except (ValueError, TypeError):
+                        retry_after = 0.0
+                    if retry_after > 10.0:
+                        print(f"  [WARN] Rate limited (429) with long retry-after ({retry_after}s) — skipping relation extraction to prevent blocking worker")
+                        return []
                     delay = max(retry_after, RETRY_BASE_DELAY * (2 ** attempt))
                     jitter = random.uniform(0.0, 1.0)
                     wait = delay + jitter
@@ -190,7 +201,13 @@ def _call_llm(user_message: str, attempt: int = 0) -> list[dict]:
 
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 429 and attempt < MAX_RETRIES:
-            retry_after = float(exc.response.headers.get("retry-after", 0))
+            try:
+                retry_after = float(exc.response.headers.get("retry-after", 0))
+            except (ValueError, TypeError):
+                retry_after = 0.0
+            if retry_after > 10.0:
+                print(f"  [WARN] Rate limited (429) with long retry-after ({retry_after}s) — skipping relation extraction to prevent blocking worker")
+                return []
             delay = max(retry_after, RETRY_BASE_DELAY * (2 ** attempt))
             jitter = random.uniform(0.0, 1.0)
             wait = delay + jitter

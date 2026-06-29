@@ -20,9 +20,9 @@ services:
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
-      - "--web.enable-lifecycle"   # allows hot-reload: curl -X POST localhost:9091/-/reload
+      - "--web.enable-lifecycle"   # allows hot-reload: curl -X POST localhost:9092/-/reload
     ports:
-      - "9091:9090"               # 9091 externally to avoid clash with Celery metrics server
+      - "9092:9090"               # 9092 externally to avoid clash with Celery metrics server
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"   # lets Prometheus reach services on the host

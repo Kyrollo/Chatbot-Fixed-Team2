@@ -26,7 +26,7 @@ from services.cache import get_retrieval_cache
 from services.graph_retriever import GraphRetriever
 from services.query_analyzer import analyze_query
 from services.reranker import get_reranker_service
-from services.retrieval_router import route_query
+from services.retrieval_router import route_query, _FALLBACK, RoutingDecision
 from services.rrf_fusion import fuse_results
 from services.vector_retriever import VectorRetriever
 
@@ -98,7 +98,6 @@ class RetrievalPipeline:
                 )
             except asyncio.TimeoutError:
                 logger.warning("route_query timed out after 2s — using fallback")
-                from services.retrieval_router import _FALLBACK, RoutingDecision
                 use_graph = bool(settings.AGE_DATABASE_DSN) and (
                     analysis.contains_entities or analysis.relationship_intent
                 )

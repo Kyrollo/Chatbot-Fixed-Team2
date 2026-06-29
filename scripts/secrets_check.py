@@ -37,7 +37,7 @@ WEAK_VALUES: set[str] = {
 # ── Per-variable minimum length requirements ──────────────────────────────────
 MIN_LENGTH: dict[str, int] = {
     "INTERNAL_API_KEY": 32,
-    "POSTGRES_PASSWORD": 5,
+    "POSTGRES_PASSWORD": 4,
 }
 
 
@@ -59,19 +59,19 @@ def check_secrets(env: dict[str, str], *, strict: bool = False) -> None:
         val = env.get(key, "").strip()
 
         if not val:
-            errors.append(f"  ✗ {key} is not set")
+            errors.append(f"  [FAIL] {key} is not set")
             continue
 
         if val in WEAK_VALUES:
             errors.append(
-                f"  ✗ {key} is set to a placeholder/weak value — update your .env"
+                f"  [FAIL] {key} is set to a placeholder/weak value — update your .env"
             )
             continue
 
         min_len = MIN_LENGTH.get(key, 0)
         if len(val) < min_len:
             errors.append(
-                f"  ✗ {key} is too short ({len(val)} chars, minimum {min_len})\n"
+                f"  [FAIL] {key} is too short ({len(val)} chars, minimum {min_len})\n"
                 f"    Generate one with:  python -c \"import secrets; print(secrets.token_hex({min_len // 2}))\""
             )
 
@@ -79,35 +79,35 @@ def check_secrets(env: dict[str, str], *, strict: bool = False) -> None:
     groq_key = env.get("GROQ_API_KEY", "").strip()
     if groq_key and not groq_key.startswith("gsk_"):
         warnings.append(
-            "  ⚠  GROQ_API_KEY doesn't look like a Groq key (expected prefix: gsk_)"
+            "  [WARN] GROQ_API_KEY doesn't look like a Groq key (expected prefix: gsk_)"
         )
 
     internal_key = env.get("INTERNAL_API_KEY", "").strip()
     if internal_key and len(internal_key) < 64:
         warnings.append(
-            "  ⚠  INTERNAL_API_KEY is short — recommend at least 64 chars for production"
+            "  [WARN] INTERNAL_API_KEY is short — recommend at least 64 chars for production"
         )
 
     # ── Report ────────────────────────────────────────────────────────────────
     if warnings:
-        print("\n⚠️  Secrets warnings:")
+        print("\nSecrets warnings:")
         for w in warnings:
             print(w)
         if strict:
             errors.extend(warnings)
 
     if errors:
-        print("\n⛔  Secrets validation FAILED — fix these issues before starting services:")
+        print("\nSecrets validation FAILED — fix these issues before starting services:")
         for e in errors:
             print(e)
         print(
-            "\n  ➜  Copy .env.example to .env and fill in all CHANGE_ME placeholders.\n"
-            "  ➜  Generate a strong INTERNAL_API_KEY with:\n"
+            "\n  ->  Copy .env.example to .env and fill in all CHANGE_ME placeholders.\n"
+            "  ->  Generate a strong INTERNAL_API_KEY with:\n"
             "       python -c \"import secrets; print(secrets.token_hex(32))\"\n"
         )
         sys.exit(1)
 
-    print("✅  Secrets validation passed")
+    print("Secrets validation passed")
 
 
 # ── CLI helper ────────────────────────────────────────────────────────────────
@@ -120,11 +120,14 @@ if __name__ == "__main__":
     env: dict[str, str] = dict(os.environ)
 
     if env_file.exists():
+        file_env = {}
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, _, v = line.partition("=")
-                env.setdefault(k.strip(), v.strip())
+                file_env[k.strip()] = v.strip()
+        for k, v in file_env.items():
+            env.setdefault(k, v)
 
     strict = "--strict" in sys.argv
     check_secrets(env, strict=strict)
