@@ -19,7 +19,7 @@
 #   docker run --rm --env-file services/worker-service/.env rag-worker:dev
 # =============================================================================
 
-FROM rag-base:dev AS worker
+FROM hudamawood/rag-base:latest AS worker
 
 WORKDIR /app
 

@@ -22,7 +22,7 @@
 #   docker run --rm -p 8000:8000 --env-file services/domain-service/.env rag-monolith:dev
 # =============================================================================
 
-FROM rag-base:dev AS monolith
+FROM hudamawood/rag-base:latest AS monolith
 
 WORKDIR /app
 

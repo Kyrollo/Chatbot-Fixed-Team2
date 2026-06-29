@@ -21,13 +21,15 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Base Image
+      - name: Build and Push Base Image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: infra/docker/Dockerfile.base
-          load: true
-          tags: rag-base:dev
+          push: true
+          tags: hudamawood/rag-base:latest,hudamawood/rag-base:${{ github.sha }}
+          cache-from: type=registry,ref=hudamawood/rag-base:latest
+          cache-to: type=inline
 
       - name: Build and Push Monolith Image
         uses: docker/build-push-action@v5
@@ -35,7 +37,9 @@ jobs:
           context: .
           file: infra/docker/Dockerfile.monolith
           push: true
-          tags: hudamawood/rag-monolith:latest, hudamawood/rag-monolith:${{ github.sha }}
+          tags: hudamawood/rag-monolith:latest,hudamawood/rag-monolith:${{ github.sha }}
+          cache-from: type=registry,ref=hudamawood/rag-monolith:latest
+          cache-to: type=inline
 
       - name: Build and Push Worker Image
         uses: docker/build-push-action@v5
@@ -43,7 +47,9 @@ jobs:
           context: .
           file: infra/docker/Dockerfile.worker
           push: true
-          tags: hudamawood/rag-worker:latest, hudamawood/rag-worker:${{ github.sha }}
+          tags: hudamawood/rag-worker:latest,hudamawood/rag-worker:${{ github.sha }}
+          cache-from: type=registry,ref=hudamawood/rag-worker:latest
+          cache-to: type=inline
 
       - name: Build and Push Evaluation Image
         uses: docker/build-push-action@v5
@@ -51,7 +57,9 @@ jobs:
           context: .
           file: infra/docker/Dockerfile.evaluation
           push: true
-          tags: hudamawood/rag-evaluation:latest, hudamawood/rag-evaluation:${{ github.sha }}
+          tags: hudamawood/rag-evaluation:latest,hudamawood/rag-evaluation:${{ github.sha }}
+          cache-from: type=registry,ref=hudamawood/rag-evaluation:latest
+          cache-to: type=inline
 
       - name: Build and Push UI Image
         uses: docker/build-push-action@v5
@@ -59,4 +67,6 @@ jobs:
           context: .
           file: infra/docker/Dockerfile.rag-ui
           push: true
-          tags: hudamawood/rag-ui:latest, hudamawood/rag-ui:${{ github.sha }}
+          tags: hudamawood/rag-ui:latest,hudamawood/rag-ui:${{ github.sha }}
+          cache-from: type=registry,ref=hudamawood/rag-ui:latest
+          cache-to: type=inline
