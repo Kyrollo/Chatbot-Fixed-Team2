@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # infra/helm/rag-platform/charts/rag-ui/values.yaml
 #
 # rag-ui is the ONLY Service in this platform meant for external exposure.
@@ -12,7 +12,7 @@ replicaCount: 1
 
 image:
   # Pushed by .github/workflows/docker-build-push.yml on every push to main.
-  repository: rag-system/rag-ui
+  repository: hudamawood/rag-ui
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -53,3 +53,14 @@ probes:
     path: /health
     initialDelaySeconds: 5
     periodSeconds: 10
+
+# --- Ingress -------------------------------------------------------------------
+# By default, ingress is disabled. Override this in environment-specific files.
+ingress:
+  enabled: false
+  host: rag-platform.local
+  annotations: {}
+  tls:
+    enabled: false
+    clusterIssuer: ""
+    secretName: ""

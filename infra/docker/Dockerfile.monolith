@@ -39,12 +39,14 @@ COPY services/retrieval-service/ /app/services/retrieval-service/
 COPY services/generation-service/ /app/services/generation-service/
 COPY services/evaluation-service/ /app/services/evaluation-service/
 COPY services/shared/            /app/services/shared/
+COPY scripts/                    /app/scripts/
 
 # --- Permissions -------------------------------------------------------------
 # Non-root user (created in Dockerfile.base) needs ownership of app code,
 # otherwise uvicorn fails to start or can't write __pycache__/logs.
 RUN chown -R appuser:appuser /app
 
+ENV PYTHONPATH=/app/scripts
 USER appuser
 
 WORKDIR /app/services/monolith

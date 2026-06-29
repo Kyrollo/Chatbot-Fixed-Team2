@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # infra/helm/rag-platform/charts/worker-service/values.yaml
 #
 # worker-service has NO Service and NO HPA templates (per spec — Celery
@@ -11,7 +11,7 @@ replicaCount: 1
 
 image:
   # Pushed by .github/workflows/docker-build-push.yml on every push to main.
-  repository: rag-system/rag-worker
+  repository: hudamawood/rag-worker
   tag: latest
   pullPolicy: IfNotPresent
 

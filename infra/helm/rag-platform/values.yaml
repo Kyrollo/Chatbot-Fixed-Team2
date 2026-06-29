@@ -58,3 +58,6 @@ worker-service:
 
 rag-ui:
   enabled: true
+  ingress:
+    enabled: false
+    host: rag-platform.local

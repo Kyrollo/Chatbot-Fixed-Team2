@@ -56,3 +56,15 @@ rag-ui:
       memory: 256Mi
   hpa:
     enabled: false
+  ingress:
+    enabled: true
+    host: rag-platform.local
+
+rag-ui:
+  ingress:
+    enabled: true
+    host: rag-platform.local
+
+global:
+  tls:
+    enabled: false

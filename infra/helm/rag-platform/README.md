@@ -1,4 +1,4 @@
-# RAG Platform — Helm Chart
+﻿# RAG Platform — Helm Chart
 
 Deploys `monolith-service`, `evaluation-service` (api + worker + beat),
 `worker-service`, and `rag-ui` to Kubernetes. All four Services are
@@ -30,7 +30,7 @@ them to Docker Hub under the `rag-system` namespace on every push to
 `main`. Each image gets two tags: `latest` and the 7-character commit SHA.
 
 You don't need Docker installed locally just to deploy — `helm install`
-pulls the images directly from Docker Hub (`docker.io/rag-system/...`,
+pulls the images directly from Docker Hub (`docker.io/hudamawood/...`,
 public repos, no `imagePullSecrets` needed).
 
 To find the exact SHA tag from a given push, check the workflow run's

@@ -1,0 +1,85 @@
+# =============================================================================
+# infra/helm/rag-platform/templates/cluster-issuer.yaml
+#
+# A ClusterIssuer tells cert-manager HOW to obtain a TLS certificate.
+# This lives at the UMBRELLA chart level (not inside rag-ui's subchart)
+# because a ClusterIssuer is a cluster-scoped object — it isn't tied to
+# one namespace or one service, it's shared infrastructure, same idea
+# as the Ingress Controller itself.
+#
+# Two modes, controlled by `global.tls.issuer` in values.yaml:
+#
+#   "selfsigned" (default, used for local/dev clusters like Docker
+#   Desktop's kind cluster):
+#     Issues a certificate signed by a CA cert-manager generates itself.
+#     Browsers will show a warning ("not trusted") because no public CA
+#     vouches for it — that's expected and fine for local development.
+#
+#   "letsencrypt" (used once this is deployed to a REAL server with a
+#   REAL public domain that the internet can reach):
+#     Issues a real, publicly-trusted certificate from Let's Encrypt,
+#     completely free, auto-renewed by cert-manager before it expires.
+#     This CANNOT work from a laptop with no public IP — Let's Encrypt's
+#     servers must be able to reach this cluster from the internet to
+#     verify domain ownership (HTTP-01 challenge).
+#
+# Switching from selfsigned to letsencrypt later is a ONE-LINE change
+# in values-<env>.yaml (global.tls.issuer) plus a real email address and
+# a real domain in ingress.host — nothing else in this chart changes.
+#
+# Requires cert-manager to already be installed on the cluster (it is
+# NOT part of this chart — see the umbrella README's "TLS / public
+# access" section for the one-time install command).
+# =============================================================================
+{{- if .Values.global.tls.enabled }}
+{{- if eq .Values.global.tls.issuer "selfsigned" }}
+# --- Self-signed mode: a local root CA, then an Issuer signed by that CA ----
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-root-issuer
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: selfsigned-root-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  isCA: true
+  commonName: rag-platform-selfsigned-root-ca
+  secretName: rag-platform-selfsigned-root-ca-secret
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: selfsigned-root-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.global.tls.clusterIssuerName }}
+spec:
+  ca:
+    secretName: rag-platform-selfsigned-root-ca-secret
+{{- else if eq .Values.global.tls.issuer "letsencrypt" }}
+# --- Let's Encrypt mode: REQUIRES a real public domain + a reachable cluster
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.global.tls.clusterIssuerName }}
+spec:
+  acme:
+    server: {{ .Values.global.tls.letsencrypt.server }}
+    email: {{ .Values.global.tls.letsencrypt.email | quote }}
+    privateKeySecretRef:
+      name: {{ .Values.global.tls.clusterIssuerName }}-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx
+{{- end }}
+{{- end }}

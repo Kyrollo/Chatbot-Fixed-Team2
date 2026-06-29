@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # infra/helm/rag-platform/charts/monolith-service/values.yaml
 #
 # Defaults for this subchart. The umbrella chart's values-dev/staging/prod.yaml
@@ -14,7 +14,7 @@ image:
   # Tagged both `latest` and the 7-char commit SHA — use `latest` for quick
   # local/dev iteration, pin to a specific SHA for staging/prod so you know
   # exactly which build is running (and can roll back precisely).
-  repository: rag-system/rag-monolith
+  repository: hudamawood/rag-monolith
   tag: latest
   pullPolicy: IfNotPresent
 
