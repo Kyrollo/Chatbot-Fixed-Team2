@@ -111,7 +111,7 @@ if __name__ == "__main__":
     db = os.getenv("POSTGRES_DB", "domain_db")
     host = os.getenv("POSTGRES_HOST", "localhost")
     
-    db_urls.append(f"postgresql://{user}:{password}@{host}:5432/{db}")
+    db_urls.append(f"postgresql://{user}:{password}@{host}:5433/{db}")
     db_urls.append(f"postgresql://{user}:{password}@{host}:5433/{db}")
     
     # Deduplicate candidate URLs based on normalized connection strings
