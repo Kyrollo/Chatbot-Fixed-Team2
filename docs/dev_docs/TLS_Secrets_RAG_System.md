@@ -61,7 +61,7 @@ The file responsible for this entire layer is the `Caddyfile` at the project roo
 
 | Address (HTTPS) | Routes to | Purpose |
 |---|---|---|
-| `https://localhost:3000` | `rag-ui/dist` (static files) | User interface (React) |
+| `https://localhost:3001` | `rag-ui/dist` (static files) | User interface (React) |
 | `https://localhost:8000` | `http://localhost:8001` (monolith-service) | Main API Gateway |
 | `https://localhost:8443` | `http://localhost:8180` (Keycloak) | Identity provider / login |
 
@@ -75,7 +75,7 @@ Here is the complete configuration as it exists in the project:
 }
 
 # ─── React UI ──────────────────────────────────────────────────────────────
-https://localhost:3000 {
+https://localhost:3001 {
 	root * rag-ui/dist
 	file_server
 	try_files {path} /index.html
@@ -89,7 +89,7 @@ https://localhost:3000 {
 https://localhost:8000 {
 
 	header {
-		Access-Control-Allow-Origin  "https://localhost:3000"
+		Access-Control-Allow-Origin  "https://localhost:3001"
 		Access-Control-Allow-Headers "Authorization, Content-Type, X-Internal-Key"
 		Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 		X-Content-Type-Options "nosniff"
@@ -134,7 +134,7 @@ https://localhost:8443 {
 
 - **`admin localhost:2019`** — Caddy's own admin port (an internal API for controlling Caddy at runtime; not exposed externally).
 - **React UI block** — Serves the built UI files (`rag-ui/dist`) as static assets. `try_files` makes any unknown route (e.g. `/domains/123`) fall back to `index.html` so React Router can handle client-side routing (SPA fallback).
-- **API Gateway block** — This is the core piece: it adds explicit CORS headers (only `https://localhost:3000` is allowed to talk to the API), and short-circuits any `OPTIONS` request with a `204` instead of forwarding it to the real backend.
+- **API Gateway block** — This is the core piece: it adds explicit CORS headers (only `https://localhost:3001` is allowed to talk to the API), and short-circuits any `OPTIONS` request with a `204` instead of forwarding it to the real backend.
 - **`/internal/*` path** — Protected by a `remote_ip` condition: if the request doesn't come from `127.0.0.1` or `::1` (i.e., from outside the machine itself), it gets `abort`ed before reaching the service. This means any internal, service-to-service endpoint is unreachable from the outside even if someone knows the URL.
 - **Keycloak block** — A simple reverse proxy from `https://localhost:8443` to Keycloak on `8180`, adding `X-Forwarded-Proto: https` so Keycloak knows the original request was HTTPS.
 
@@ -330,7 +330,7 @@ npm run build    :: important: Caddy serves from rag-ui/dist, not the dev server
 ```
 
 > **Note on the frontend**
-> The `https://localhost:3000` block in the Caddyfile reads static files directly from `rag-ui/dist` — so you need to run `npm run build` first (not `npm run dev`).
+> The `https://localhost:3001` block in the Caddyfile reads static files directly from `rag-ui/dist` — so you need to run `npm run build` first (not `npm run dev`).
 > If you're actively developing the UI and want hot reload, use the regular `npm run dev` on port 5173 (see `vite.config.ts`) and leave Caddy for just the API/Keycloak.
 
 ### 6.3 Verifying Everything Is Running
@@ -343,14 +343,14 @@ curl -k https://localhost:8000/api/v1/domains/monitoring/health
 curl -k https://localhost:8443/realms/rag-system
 
 # Confirm the UI is running
-curl -k https://localhost:3000
+curl -k https://localhost:3001
 ```
 
 The `-k` flag here means "ignore certificate verification" — useful only for testing from a terminal; the browser will actually need to trust Caddy's certificate (next section).
 
 ### 6.4 Handling the Browser Certificate Warning
 
-The first time you open `https://localhost:8000` or `https://localhost:3000`, the browser may show an "Unsafe connection" warning because Caddy's certificate is signed by a local CA the browser doesn't yet recognize.
+The first time you open `https://localhost:8000` or `https://localhost:3001`, the browser may show an "Unsafe connection" warning because Caddy's certificate is signed by a local CA the browser doesn't yet recognize.
 
 1. The safest fix: run the following command once (it installs Caddy's local CA into the OS trust store):
 

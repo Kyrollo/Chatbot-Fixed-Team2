@@ -2,8 +2,8 @@
 
 **Version:** 1.0  
 **Last Updated:** June 2026  
-**Application URL:** `http://localhost:3000`  
-**API URL:** `http://localhost:8000`
+**Application URL:** `https://localhost:3001`  
+**API URL:** `https://localhost:8000`
 
 ## 1. What This System Does
 
@@ -24,7 +24,7 @@ If a button or page is missing, your role may not include that permission.
 
 ## 3. Log In
 
-1. Open `http://localhost:3000`.
+1. Open `https://localhost:3001`.
 2. Enter your user ID, such as `admin`, `test_reader`, or the ID assigned by your administrator.
 3. Click **Login**.
 4. Wait for the main app screen to load.
@@ -35,7 +35,7 @@ If login fails:
 - Ask an administrator to confirm your user exists.
 - If your organization uses Keycloak, use the Keycloak login option instead of dev login.
 
-SCREENSHOT PLACEHOLDER: Login page with user ID field and login button.
+![Login Page](screenshots/ug_login.png)
 
 ## 4. Choose a Domain
 
@@ -47,7 +47,7 @@ A domain is an isolated knowledge space. Documents, users, and answers in one do
 
 If a domain is missing, you are probably not assigned to it. Contact a domain administrator.
 
-SCREENSHOT PLACEHOLDER: Domain list and selected domain state.
+![Domain Catalog](screenshots/ug_domain_list.png)
 
 ## 5. Create a Domain
 
@@ -62,7 +62,7 @@ Who can do this: domain administrators or system administrators, depending on co
 
 Good domain names are specific. For example, use `Engineering Runbooks` instead of `Documents`.
 
-SCREENSHOT PLACEHOLDER: Create domain form.
+![Create Domain Form](screenshots/ug_create_domain.png)
 
 ## 6. Manage Members
 
@@ -80,7 +80,7 @@ Who can do this: domain administrators and system administrators.
 
 Use the lowest role that lets the user do their job.
 
-SCREENSHOT PLACEHOLDER: Domain member management table.
+![Domain Members Management](screenshots/ug_members.png)
 
 ## 7. Upload a Document
 
@@ -100,7 +100,7 @@ Who can do this: contributors, domain administrators, and system administrators.
 
 Do not upload documents containing secrets, passwords, or sensitive personal data unless your organization has approved that use.
 
-SCREENSHOT PLACEHOLDER: Upload form with file picker and domain selector.
+![Document Upload Form](screenshots/ug_upload.png)
 
 ## 8. Understand Document Status
 
@@ -115,7 +115,7 @@ After upload, the worker processes the file before it can be searched.
 
 If a document stays pending for more than 10 minutes, the worker service may not be running.
 
-SCREENSHOT PLACEHOLDER: Document list with status column.
+![Documents Status List](screenshots/ug_document_status.png)
 
 ## 9. Ask a Question
 
@@ -140,7 +140,7 @@ Less useful questions:
 - "What should I do?"
 - "Is this good?"
 
-SCREENSHOT PLACEHOLDER: Chat page with question, answer, and citations.
+![Chat Console](screenshots/ug_chat.png)
 
 ## 10. Read Citations
 
@@ -160,7 +160,7 @@ How to use citations:
 3. If the answer is important, open the original document and verify the surrounding section.
 4. If citations do not support the answer, do not rely on it.
 
-SCREENSHOT PLACEHOLDER: Citation card with filename, score, page, and snippet.
+![Citation Zoom](screenshots/ug_citation.png)
 
 ## 11. Quality Scores
 
@@ -173,7 +173,7 @@ Some deployments include an evaluation dashboard. It may show:
 
 Low scores do not always mean the answer is wrong, but they should be reviewed.
 
-SCREENSHOT PLACEHOLDER: Evaluation dashboard with score columns.
+![Evaluation Dashboard](screenshots/ug_evaluation.png)
 
 ## 12. Common Errors
 

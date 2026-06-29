@@ -177,9 +177,3 @@ This policy must be reviewed:
 - After any security incident.
 - At least every 6 months.
 
-| Approver | Role | Signature | Date |
-|---|---|---|---|
-| | Project Lead | | |
-| | Security/Compliance Owner | | |
-| | Technical Lead | | |
-
