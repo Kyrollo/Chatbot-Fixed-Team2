@@ -14,27 +14,53 @@
 # =============================================================================
 
 # --- Image registry ----------------------------------------------------------
-# No registry has been chosen yet (confirmed with the team). Images are
-# built and tagged locally (rag-monolith:dev, rag-worker:dev,
-# rag-evaluation:dev) and loaded directly into the local cluster
-# (e.g. `minikube image load rag-monolith:dev` or `kind load docker-image`).
-#
 # imagePullPolicy is IfNotPresent so the cluster uses the locally-loaded
 # image instead of trying to pull from a registry that doesn't exist yet.
-# When a registry IS chosen later, only `repository` below needs to change
-# to something like "ghcr.io/yourorg/rag-monolith" — nothing else in the
-# chart needs to change.
+# When a registry IS chosen later, only `repository` below needs to change.
 global:
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
 
+  # --- TLS configuration -----------------------------------------------------
+  # Controls cluster-issuer.yaml AND ingress.yaml in rag-ui subchart.
+  # All three templates read from this single block so there is one place
+  # to change when switching environments.
+  #
+  # issuer options:
+  #   "selfsigned"  — cert-manager generates its own local CA.
+  #                   Use this for local dev (Docker Desktop / kind / minikube).
+  #                   Browser will warn ("not trusted") — expected for local dev.
+  #                   Matches the spirit of the Caddy local-dev setup (Caddyfile)
+  #                   where TLS is a gateway concern, not per-service.
+  #
+  #   "letsencrypt" — Real publicly-trusted cert from Let's Encrypt (free,
+  #                   auto-renewed by cert-manager). REQUIRES a real public
+  #                   domain and a cluster reachable from the internet.
+  #                   Cannot work from a laptop — Let's Encrypt must be able
+  #                   to reach the cluster for HTTP-01 domain validation.
+  #
+  # Switching from selfsigned → letsencrypt later is a one-line change in
+  # values-staging.yaml or values-prod.yaml — nothing else in the chart changes.
+  tls:
+    enabled: false                          # flip to true to enable HTTPS
+    issuer: selfsigned                      # "selfsigned" or "letsencrypt"
+    clusterIssuerName: rag-platform-ca-issuer
+
+    # Only used when issuer: letsencrypt
+    letsencrypt:
+      # staging server for testing (won't be trusted by browsers but has
+      # higher rate limits — switch to prod once confirmed working):
+      #   https://acme-staging-v02.api.letsencrypt.org/directory
+      # production server (trusted, rate-limited):
+      #   https://acme-v02.api.letsencrypt.org/directory
+      server: https://acme-v02.api.letsencrypt.org/directory
+      email: ""                             # REQUIRED for letsencrypt — set in values-prod.yaml
+
 # --- External dependencies ----------------------------------------------------
-# PostgreSQL, Redis, and Keycloak are NOT deployed by this chart (per the
-# spec table marking them "External"). These values are only used to build
-# the ConfigMap/Secret entries injected into each subchart's envFrom — the
-# actual services must already be reachable from the cluster at these
-# addresses (e.g. via a Service of type ExternalName, a VM on the same
-# network, or a managed cloud database).
+# PostgreSQL, Redis, and Keycloak are NOT deployed by this chart.
+# These values are only used to build ConfigMap/Secret entries injected
+# into each subchart's envFrom — the actual services must already be
+# reachable from the cluster at these addresses.
 externalServices:
   postgres:
     host: "postgres-external.default.svc.cluster.local"
@@ -59,5 +85,6 @@ worker-service:
 rag-ui:
   enabled: true
   ingress:
-    enabled: false
+    enabled: false          # overridden per environment in values-dev/staging/prod.yaml
     host: rag-platform.local
+    

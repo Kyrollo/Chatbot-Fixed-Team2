@@ -1,14 +1,32 @@
 # =============================================================================
 # infra/helm/rag-platform/values-dev.yaml
 #
-# Dev environment overrides — use on a local cluster (minikube/kind) while
-# building and testing the chart itself. Smallest footprint, single replica
-# per service (HPA effectively has nothing to scale from at 1 replica, but
-# it's still defined so the manifest shape matches staging/prod).
+# Dev environment overrides — use on a local cluster (Docker Desktop / kind
+# / minikube) while building and testing the chart itself. Smallest
+# footprint, single replica per service.
+#
+# TLS is disabled here intentionally — matches the existing local-dev
+# Caddy setup (Caddyfile) where the app runs on plain HTTP internally and
+# TLS is only added at the gateway level when needed. For local dev,
+# http://rag-platform.local is sufficient.
+#
+# To enable TLS locally (requires cert-manager installed on the cluster):
+#   1. Set global.tls.enabled: true below
+#   2. Install cert-manager once:
+#        kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+#   3. helm upgrade rag-platform ./infra/helm/rag-platform -f values-dev.yaml
+#   Browser will show a warning (self-signed CA) — expected for local dev.
 #
 # Usage:
-#   helm install rag-platform ./infra/helm/rag-platform -f values-dev.yaml
+#   helm upgrade --install rag-platform ./infra/helm/rag-platform -f infra/helm/rag-platform/values-dev.yaml
 # =============================================================================
+
+global:
+  imagePullPolicy: Always     # always pull from Docker Hub — avoids stale cached images on the node
+  tls:
+    enabled: false            # plain HTTP for local dev: http://rag-platform.local
+    issuer: selfsigned        # ready to flip on — no config change needed, just set enabled: true
+    clusterIssuerName: rag-platform-ca-issuer
 
 monolith-service:
   replicaCount: 1
@@ -20,7 +38,7 @@ monolith-service:
       cpu: 500m
       memory: 1Gi
   hpa:
-    enabled: false   # not meaningful at 1 replica in dev; templates still render if you flip this on
+    enabled: false
 
 evaluation-service:
   replicaCount: 1
@@ -43,7 +61,6 @@ worker-service:
     limits:
       cpu: 500m
       memory: 1Gi
-  # worker-service has no Service/HPA per the spec — Deployment only.
 
 rag-ui:
   replicaCount: 1
@@ -59,12 +76,3 @@ rag-ui:
   ingress:
     enabled: true
     host: rag-platform.local
-
-rag-ui:
-  ingress:
-    enabled: true
-    host: rag-platform.local
-
-global:
-  tls:
-    enabled: false
