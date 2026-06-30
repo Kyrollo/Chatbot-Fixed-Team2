@@ -1,7 +1,8 @@
-import sys
+﻿import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+sys.path.insert(0, "/app/scripts")  # absolute fallback for Docker/K8s
 import network_bootstrap  # noqa: F401, E402
 
 import logging
