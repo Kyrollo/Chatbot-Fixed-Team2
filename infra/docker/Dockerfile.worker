@@ -19,7 +19,7 @@
 #   docker run --rm --env-file services/worker-service/.env rag-worker:dev
 # =============================================================================
 
-FROM rag-base:dev AS worker
+FROM hudamawood/rag-base:latest AS worker
 
 WORKDIR /app
 
@@ -30,9 +30,11 @@ WORKDIR /app
 # own directory plus the shared metrics module are needed.
 COPY services/worker-service/ /app/services/worker-service/
 COPY services/shared/         /app/services/shared/
+COPY scripts/                 /app/scripts/
 
 RUN chown -R appuser:appuser /app
 
+ENV PYTHONPATH=/app/scripts
 USER appuser
 
 WORKDIR /app/services/worker-service

@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # infra/helm/rag-platform/charts/evaluation-service/values.yaml
 #
 # evaluation-service runs as three roles from the SAME image
@@ -13,7 +13,7 @@ replicaCount: 1   # applies to the `api` role; worker/beat have fixed counts bel
 
 image:
   # Pushed by .github/workflows/docker-build-push.yml on every push to main.
-  repository: rag-system/rag-evaluation
+  repository: hudamawood/rag-evaluation
   tag: latest
   pullPolicy: IfNotPresent
 

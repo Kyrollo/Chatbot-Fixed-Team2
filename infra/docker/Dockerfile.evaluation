@@ -59,6 +59,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # --- Application code -------------------------------------------------------
 COPY services/evaluation-service/ /app/services/evaluation-service/
 COPY services/shared/             /app/services/shared/
+COPY scripts/                     /app/scripts/
 
 RUN chown -R appuser:appuser /app
 

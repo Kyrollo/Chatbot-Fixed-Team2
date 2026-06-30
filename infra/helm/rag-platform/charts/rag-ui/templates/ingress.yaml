@@ -1,0 +1,59 @@
+# =============================================================================
+# infra/helm/rag-platform/charts/rag-ui/templates/ingress.yaml
+#
+# THIS is the file that finally makes rag-ui reachable from outside the
+# cluster. It does NOT replace the Service in service.yaml — it sits in
+# front of it. Traffic flow:
+#
+#   Browser (HTTPS) -> Ingress Controller (nginx) -> THIS Ingress object
+#       -> Service "{{ .Release.Name }}-rag-ui" (port 80, unchanged)
+#       -> rag-ui pod
+#
+# Requires the NGINX Ingress Controller to already be installed on the
+# cluster (it is NOT part of this chart — see the umbrella README's
+# "TLS / public access" section for the one-time install command).
+#
+# Whether this renders at all is controlled by `ingress.enabled` in
+# values.yaml / values-<env>.yaml — defaults to false so existing
+# environments aren't affected until you opt in.
+# =============================================================================
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-rag-ui
+  labels:
+    app: rag-ui
+    release: {{ .Release.Name }}
+  annotations:
+    # Tells the NGINX controller this Ingress belongs to it (lets you run
+    # more than one controller class on the same cluster without clashing).
+    kubernetes.io/ingress.class: "nginx"
+    {{- if .Values.ingress.tls.enabled }}
+    # Tells cert-manager which ClusterIssuer should watch this Ingress and
+    # automatically create/renew the Certificate it references below.
+    cert-manager.io/cluster-issuer: {{ .Values.ingress.tls.clusterIssuer | quote }}
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: nginx
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-rag-ui
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}

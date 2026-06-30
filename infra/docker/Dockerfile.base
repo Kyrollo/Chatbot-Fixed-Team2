@@ -55,15 +55,22 @@ RUN groupadd --gid 1000 appuser && \
 WORKDIR /app
 
 # --- Dependency install (cached layer) --------------------------------------
-# Only the requirements.txt is copied first, so this layer is only
-# invalidated when dependencies actually change — not on every code edit.
+# Both root requirements.txt AND evaluation-service's requirements.txt are
+# installed here. WHY: services/monolith/main.py dynamically loads EVERY
+# service's main.py into the same process (including evaluation-service),
+# so the monolith process needs every import evaluation-service code uses
+# (e.g. prometheus_client, prometheus_fastapi_instrumentator, ragas) even
+# though those packages aren't listed in the root requirements.txt.
+# Installing both files in one pip call lets pip resolve any version
+# overlaps/conflicts itself instead of merging the files by hand.
 COPY requirements.txt /app/requirements.txt
+COPY services/evaluation-service/requirements.txt /app/requirements-evaluation.txt
 
 # --extra-index-url for the CPU-only PyTorch wheels is already declared
 # INSIDE requirements.txt itself (per the file's own header), so a plain
 # pip install picks it up — no extra --extra-index-url flag needed here.
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r /app/requirements.txt
+    pip install --no-cache-dir -r /app/requirements.txt -r /app/requirements-evaluation.txt
 
 # NOTE: actual application code is NOT copied here. Dockerfile.monolith
 # and Dockerfile.worker each FROM this image and COPY their own code in
