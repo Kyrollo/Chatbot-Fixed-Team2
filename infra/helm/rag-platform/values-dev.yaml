@@ -56,3 +56,33 @@ rag-ui:
       memory: 256Mi
   hpa:
     enabled: false
+
+monitoring:
+  enabled: true
+  prometheus:
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+  grafana:
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+  alertmanager:
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: 20m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi

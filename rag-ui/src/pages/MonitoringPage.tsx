@@ -1,6 +1,6 @@
 // src/pages/MonitoringPage.tsx
 import { useEffect, useState } from 'react'
-import { Server, Database, Cpu, HardDrive, RefreshCw, BarChart2, ShieldAlert, Download, Trash2 } from 'lucide-react'
+import { Server, Database, Cpu, HardDrive, RefreshCw, BarChart2, ShieldAlert, Download, Trash2, ExternalLink, AlertTriangle, Activity } from 'lucide-react'
 import { healthApi, monitoringApi } from '../lib/api'
 import { useAuthStore } from '../store/authStore'
 import { cn } from '../lib/utils'
@@ -10,6 +10,41 @@ const SERVICES = [
   { label: 'Ingestion Service', path: '/ingest' },
   { label: 'Generation Service', path: '/generate' },
   { label: 'Evaluation Service', path: '/evaluate' },
+]
+
+const promPort = import.meta.env.VITE_PROMETHEUS_PORT || '9092'
+const grafanaPort = import.meta.env.VITE_GRAFANA_PORT || '3000'
+const alertPort = import.meta.env.VITE_ALERTMANAGER_PORT || '9093'
+
+const GRAFANA_DASHBOARDS = [
+  {
+    label: 'Service Health',
+    description: 'Request rate, error rate, and latency per service',
+    url: `http://localhost:${grafanaPort}/d/rag-service-health`,
+    color: 'text-emerald-400',
+    bg: 'bg-emerald-500/10 border-emerald-500/20',
+  },
+  {
+    label: 'Evaluation Quality',
+    description: 'Judge scores, eval latency, and failure rate',
+    url: `http://localhost:${grafanaPort}/d/rag-eval-quality`,
+    color: 'text-violet-400',
+    bg: 'bg-violet-500/10 border-violet-500/20',
+  },
+  {
+    label: 'Infra Overview',
+    description: 'Celery workers, task throughput, and 24h totals',
+    url: `http://localhost:${grafanaPort}/d/rag-infra-overview`,
+    color: 'text-sky-400',
+    bg: 'bg-sky-500/10 border-sky-500/20',
+  },
+  {
+    label: 'Retrieval Pipeline',
+    description: 'Dense search, sparse search, fusion, and reranker latencies',
+    url: `http://localhost:${grafanaPort}/d/rag-retrieval-pipeline`,
+    color: 'text-amber-400',
+    bg: 'bg-amber-500/10 border-amber-500/20',
+  },
 ]
 
 interface Metrics {
@@ -46,6 +81,29 @@ export default function MonitoringPage() {
   const [metrics, setMetrics] = useState<Metrics | null>(null)
   const [metricsLoading, setMetricsLoading] = useState(false)
   const [metricsError, setMetricsError] = useState('')
+  const [prometheusUp, setPrometheusUp] = useState<boolean | null>(null)
+  const [alertsCount, setAlertsCount] = useState<number | null>(null)
+
+  async function checkPrometheus() {
+    try {
+      const res = await fetch(`http://localhost:${promPort}/-/healthy`, { signal: AbortSignal.timeout(3000) })
+      setPrometheusUp(res.ok)
+    } catch {
+      setPrometheusUp(false)
+    }
+  }
+
+  async function checkAlerts() {
+    try {
+      const res = await fetch(`http://localhost:${alertPort}/api/v2/alerts?active=true`, { signal: AbortSignal.timeout(3000) })
+      if (res.ok) {
+        const data = await res.json()
+        setAlertsCount(Array.isArray(data) ? data.length : 0)
+      }
+    } catch {
+      setAlertsCount(null)
+    }
+  }
 
   // 1. Basic Health Check for Services
   async function checkHealth() {
@@ -98,7 +156,13 @@ export default function MonitoringPage() {
 
   useEffect(() => {
     checkHealth()
+    checkPrometheus()
+    checkAlerts()
     const healthInterval = setInterval(checkHealth, 15000)
+    const promInterval = setInterval(() => {
+      checkPrometheus()
+      checkAlerts()
+    }, 30000)
 
     if (isSystemAdmin) {
       setMetricsLoading(true)
@@ -107,11 +171,13 @@ export default function MonitoringPage() {
       return () => {
         clearInterval(healthInterval)
         clearInterval(metricsInterval)
+        clearInterval(promInterval)
       }
     }
 
     return () => {
       clearInterval(healthInterval)
+      clearInterval(promInterval)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSystemAdmin])
@@ -150,6 +216,8 @@ export default function MonitoringPage() {
           <button
             onClick={async () => {
               checkHealth()
+              checkPrometheus()
+              checkAlerts()
               if (isSystemAdmin) {
                 setMetricsLoading(true)
                 await fetchMetrics().finally(() => setMetricsLoading(false))
@@ -188,7 +256,7 @@ export default function MonitoringPage() {
             <h4 className="text-sm font-semibold text-foreground">Elevated Privilege Required</h4>
             <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
               Infrastructure metrics (Celery queue depth, search latencies, redis cache memory, and document stats) are restricted to System Administrators.
-              Login with a System Admin account to view detailed analytics.
+              Login with a System Admin account to view detailed analytics and Grafana dashboards.
             </p>
           </div>
         </div>
@@ -202,6 +270,111 @@ export default function MonitoringPage() {
               {metricsError}
             </div>
           )}
+
+          {/* Grafana dashboards */}
+          <div className="glass rounded-xl p-5 border border-border space-y-4">
+            <div className="flex items-center justify-between border-b border-border/40 pb-3 gap-3">
+              <h3 className="font-bold text-sm flex items-center gap-2">
+                <BarChart2 size={16} className="text-primary" /> Grafana Dashboards
+              </h3>
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                <span className={cn(
+                  'flex items-center gap-1.5 text-xs font-semibold px-2 py-0.5 rounded-full border',
+                  prometheusUp === true
+                    ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                    : prometheusUp === false
+                      ? 'text-red-400 bg-red-500/10 border-red-500/20'
+                      : 'text-muted-foreground bg-muted/20 border-border'
+                )}>
+                  <span className={cn('h-1.5 w-1.5 rounded-full', prometheusUp === true ? 'bg-emerald-500 animate-pulse' : prometheusUp === false ? 'bg-red-500' : 'bg-muted-foreground')} />
+                  Prometheus {prometheusUp === true ? 'UP' : prometheusUp === false ? 'DOWN' : 'Checking...'}
+                </span>
+                <a
+                  href={`http://localhost:${grafanaPort}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition px-2 py-0.5 rounded border border-border hover:bg-card"
+                >
+                  Open Grafana <ExternalLink size={11} />
+                </a>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              {GRAFANA_DASHBOARDS.map((dashboard) => (
+                <a
+                  key={dashboard.label}
+                  href={dashboard.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={cn(
+                    'group flex flex-col gap-1.5 rounded-xl border p-4 transition hover:scale-[1.02] hover:shadow-md',
+                    dashboard.bg
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={cn('text-sm font-bold', dashboard.color)}>{dashboard.label}</span>
+                    <ExternalLink size={13} className={cn('opacity-0 group-hover:opacity-100 transition', dashboard.color)} />
+                  </div>
+                  <span className="text-xs text-muted-foreground leading-relaxed">{dashboard.description}</span>
+                </a>
+              ))}
+            </div>
+          </div>
+
+          {/* Prometheus and Alertmanager */}
+          <div className="glass rounded-xl p-5 border border-border space-y-4">
+            <h3 className="font-bold text-sm flex items-center gap-2 border-b border-border/40 pb-3">
+              <Activity size={16} className="text-primary" /> Prometheus & Alertmanager
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <a
+                href={`http://localhost:${promPort}/targets`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group flex flex-col gap-2 rounded-xl border border-border p-4 bg-card/20 hover:bg-card/40 transition hover:scale-[1.01]"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold text-foreground">Prometheus</span>
+                  <ExternalLink size={13} className="text-muted-foreground opacity-0 group-hover:opacity-100 transition" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={cn('h-2 w-2 rounded-full', prometheusUp === true ? 'bg-emerald-500 animate-pulse' : prometheusUp === false ? 'bg-red-500' : 'bg-muted-foreground')} />
+                  <span className="text-xs text-muted-foreground">
+                    {prometheusUp === true ? 'Scraping metrics every 15s - click to view targets' : prometheusUp === false ? 'Not reachable - is the monitoring stack running?' : 'Checking...'}
+                  </span>
+                </div>
+                <span className="text-[10px] text-muted-foreground/60 font-mono">localhost:{promPort}</span>
+              </a>
+
+              <a
+                href={`http://localhost:${alertPort}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group flex flex-col gap-2 rounded-xl border border-border p-4 bg-card/20 hover:bg-card/40 transition hover:scale-[1.01]"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold text-foreground">Alertmanager</span>
+                  <ExternalLink size={13} className="text-muted-foreground opacity-0 group-hover:opacity-100 transition" />
+                </div>
+                <div className="flex items-center gap-2">
+                  {alertsCount === null ? (
+                    <span className="text-xs text-muted-foreground">Could not reach Alertmanager</span>
+                  ) : alertsCount === 0 ? (
+                    <>
+                      <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                      <span className="text-xs text-emerald-400 font-semibold">No active alerts</span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle size={14} className="text-red-400" />
+                      <span className="text-xs text-red-400 font-semibold">{alertsCount} active alert{alertsCount > 1 ? 's' : ''} firing</span>
+                    </>
+                  )}
+                </div>
+                <span className="text-[10px] text-muted-foreground/60 font-mono">localhost:{alertPort}</span>
+              </a>
+            </div>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Queue Monitor */}

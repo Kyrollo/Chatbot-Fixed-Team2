@@ -1,0 +1,153 @@
+{
+  "title": "Retrieval Pipeline",
+  "uid": "rag-retrieval-pipeline",
+  "tags": ["rag", "retrieval"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Average RRF Fusion Score",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 5 },
+      "targets": [
+        {
+          "expr": "rrf_top_score",
+          "legendFormat": "Top Fusion Score"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["mean"] },
+        "orientation": "horizontal",
+        "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0, "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": 0 },
+            { "color": "yellow", "value": 0.5 },
+            { "color": "green", "value": 0.8 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Cache Hit Rate (%)",
+      "type": "stat",
+      "gridPos": { "x": 8, "y": 0, "w": 8, "h": 5 },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(retrieval_cache_hits_total[5m])) / (sum(rate(retrieval_cache_hits_total[5m])) + sum(rate(retrieval_cache_misses_total[5m])))",
+          "legendFormat": "Cache Hit Rate"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "horizontal",
+        "colorMode": "background"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0, "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": 0 },
+            { "color": "yellow", "value": 30 },
+            { "color": "green", "value": 70 }
+          ]}
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Total Retrieval Requests",
+      "type": "stat",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 5 },
+      "targets": [
+        {
+          "expr": "sum(increase(retrieval_requests_total[1h]))",
+          "legendFormat": "Requests (last 1h)"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      }
+    },
+    {
+      "id": 4,
+      "title": "p95 Latency by Pipeline Stage (ms)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 5, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "1000 * histogram_quantile(0.95, sum(rate(retrieval_stage_latency_seconds_bucket[5m])) by (stage, le))",
+          "legendFormat": "{{stage}} p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ms" }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Search Engine p95 Latency (ms)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 5, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "1000 * histogram_quantile(0.95, sum(rate(qdrant_search_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "Dense Search (Qdrant) p95"
+        },
+        {
+          "expr": "1000 * histogram_quantile(0.95, sum(rate(bm25_search_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "Sparse Search (Postgres BM25) p95"
+        },
+        {
+          "expr": "1000 * histogram_quantile(0.95, sum(rate(graph_search_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "Graph Search (Apache AGE) p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ms" }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Reranking p95 Latency (ms)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 13, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "expr": "1000 * histogram_quantile(0.95, sum(rate(rerank_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "Reranker p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ms" }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Errors by Pipeline Stage",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 13, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "expr": "sum(rate(retrieval_stage_errors_total[5m])) by (stage)",
+          "legendFormat": "{{stage}} errors"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      }
+    }
+  ]
+}

@@ -1,0 +1,119 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-prometheus-config
+  labels:
+    app: prometheus
+    release: {{ .Release.Name }}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    rule_files:
+      - "/etc/prometheus/alerts.yaml"
+
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: ["{{ .Release.Name }}-alertmanager:{{ .Values.monitoring.alertmanager.service.port }}"]
+
+    scrape_configs:
+      - job_name: monolith-service
+        static_configs:
+          - targets: ["{{ .Release.Name }}-monolith-service:{{ .Values.global.monolithPort | default 8000 }}"]
+        metrics_path: /metrics
+
+      - job_name: evaluation-service
+        static_configs:
+          - targets: ["{{ .Release.Name }}-evaluation-service-api:{{ .Values.global.evaluationPort | default 8005 }}"]
+        metrics_path: /metrics
+
+      - job_name: worker-service
+        static_configs:
+          - targets: ["{{ .Release.Name }}-worker-service-metrics:9090"]
+        metrics_path: /metrics
+
+      - job_name: prometheus
+        static_configs:
+          - targets: ["localhost:9090"]
+  alerts.yaml: |
+    groups:
+      - name: evaluation-alerts
+        rules:
+          - alert: SlowEvaluationAverage
+            expr: rate(evaluation_judge_latency_seconds_sum[5m]) / rate(evaluation_judge_latency_seconds_count[5m]) > 20
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Evaluation LLM judge is taking too long"
+              description: "The average LLM judge score response latency is above 20s (currently {{ $value }}s)."
+          - alert: HighEvaluationFailureRate
+            expr: 100 * rate(eval_requests_total{status="failure"}[5m]) / rate(eval_requests_total[5m]) > 10
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Evaluation failures are high"
+              description: "More than 10% of LLM judge calls are failing."
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-prometheus
+  labels:
+    app: prometheus
+    release: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.monitoring.prometheus.replicaCount }}
+  selector:
+    matchLabels:
+      app: prometheus
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: prometheus
+        release: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: prometheus
+          image: "{{ .Values.monitoring.prometheus.image.repository }}:{{ .Values.monitoring.prometheus.image.tag }}"
+          imagePullPolicy: {{ .Values.monitoring.prometheus.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 9090
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/prometheus
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ .Release.Name }}-prometheus-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-prometheus
+  labels:
+    app: prometheus
+    release: {{ .Release.Name }}
+spec:
+  ports:
+    - name: http
+      port: {{ .Values.monitoring.prometheus.service.port }}
+      targetPort: 9090
+  selector:
+    app: prometheus
+    release: {{ .Release.Name }}
+{{- end }}

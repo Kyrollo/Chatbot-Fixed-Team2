@@ -1,0 +1,113 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-alertmanager-config
+  labels:
+    app: alertmanager
+    release: {{ .Release.Name }}
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+      slack_api_url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+
+    route:
+      receiver: slack-alerts
+      group_by: ["alertname", "service"]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 1h
+      routes:
+        - match:
+            severity: critical
+          receiver: slack-critical
+          continue: true
+
+    receivers:
+      - name: slack-alerts
+        slack_configs:
+          - channel: "#rag-alerts"
+            title: '[{{ `{{` }} .Status | toUpper {{ `}}` }}] {{ `{{` }} .CommonLabels.alertname {{ `}}` }}'
+            text: |
+              {{ `{{` }} range .Alerts {{ `}}` }}
+              *Alert:* {{ `{{` }} .Annotations.summary {{ `}}` }}
+              *Details:* {{ `{{` }} .Annotations.description {{ `}}` }}
+              *Runbook:* {{ `{{` }} .Annotations.runbook {{ `}}` }}
+              {{ `{{` }} end {{ `}}` }}
+
+      - name: slack-critical
+        slack_configs:
+          - channel: "#rag-alerts-critical"
+            title: '🚨 CRITICAL: {{ `{{` }} .CommonLabels.alertname {{ `}}` }}'
+            text: |
+              {{ `{{` }} range .Alerts {{ `}}` }}
+              *Alert:* {{ `{{` }} .Annotations.summary {{ `}}` }}
+              *Details:* {{ `{{` }} .Annotations.description {{ `}}` }}
+              *Runbook:* {{ `{{` }} .Annotations.runbook {{ `}}` }}
+              {{ `{{` }} end {{ `}}` }}
+
+    inhibit_rules:
+      - source_match:
+          severity: critical
+        target_match:
+          severity: warning
+        equal: ["service"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-alertmanager
+  labels:
+    app: alertmanager
+    release: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.monitoring.alertmanager.replicaCount }}
+  selector:
+    matchLabels:
+      app: alertmanager
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+        release: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: alertmanager
+          image: "{{ .Values.monitoring.alertmanager.image.repository }}:{{ .Values.monitoring.monitoring.alertmanager.image.tag | default .Values.monitoring.alertmanager.image.tag }}"
+          imagePullPolicy: {{ .Values.monitoring.alertmanager.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 9093
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/alertmanager
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ .Release.Name }}-alertmanager-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-alertmanager
+  labels:
+    app: alertmanager
+    release: {{ .Release.Name }}
+spec:
+  ports:
+    - name: http
+      port: {{ .Values.monitoring.alertmanager.service.port }}
+      targetPort: 9093
+  selector:
+    app: alertmanager
+    release: {{ .Release.Name }}
+{{- end }}

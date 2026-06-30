@@ -1,0 +1,127 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-grafana-datasources
+  labels:
+    app: grafana
+    release: {{ .Release.Name }}
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://{{ .Release.Name }}-prometheus:{{ .Values.monitoring.prometheus.service.port }}
+        isDefault: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-grafana-providers
+  labels:
+    app: grafana
+    release: {{ .Release.Name }}
+data:
+  provider.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /etc/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-grafana-dashboards
+  labels:
+    app: grafana
+    release: {{ .Release.Name }}
+data:
+  service-health.json: |
+{{ .Files.Get "dashboards/service-health.json" | indent 4 }}
+  evaluation-quality.json: |
+{{ .Files.Get "dashboards/evaluation-quality.json" | indent 4 }}
+  infra-overview.json: |
+{{ .Files.Get "dashboards/infra-overview.json" | indent 4 }}
+  retrieval-pipeline.json: |
+{{ .Files.Get "dashboards/retrieval-pipeline.json" | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-grafana
+  labels:
+    app: grafana
+    release: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.monitoring.grafana.replicaCount }}
+  selector:
+    matchLabels:
+      app: grafana
+      release: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: grafana
+        release: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: grafana
+          image: "{{ .Values.monitoring.grafana.image.repository }}:{{ .Values.monitoring.grafana.image.tag }}"
+          imagePullPolicy: {{ .Values.monitoring.grafana.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+          environment:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: {{ .Values.monitoring.grafana.adminPassword | quote }}
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+          volumeMounts:
+            - name: datasources-volume
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: providers-volume
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards-volume
+              mountPath: /etc/grafana/dashboards
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: datasources-volume
+          configMap:
+            name: {{ .Release.Name }}-grafana-datasources
+        - name: providers-volume
+          configMap:
+            name: {{ .Release.Name }}-grafana-providers
+        - name: dashboards-volume
+          configMap:
+            name: {{ .Release.Name }}-grafana-dashboards
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-grafana
+  labels:
+    app: grafana
+    release: {{ .Release.Name }}
+spec:
+  ports:
+    - name: http
+      port: {{ .Values.monitoring.grafana.service.port }}
+      targetPort: 3000
+  selector:
+    app: grafana
+    release: {{ .Release.Name }}
+{{- end }}
